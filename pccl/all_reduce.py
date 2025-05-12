@@ -10,7 +10,8 @@ from .request import Request
 from .process_groups import ProcessGroups
 import numpy as np
 from .utils import _torch_to_mpi
-from .all_gather import _all_gather
+from .all_gather import all_gather_2D, recursive_doubling_allgather_mpi
+from .reduce_scatter import reduce_scatter_2D, recursive_halving_reduce_scatter_mpi
 
 
 import torch
@@ -18,73 +19,87 @@ import math
 from mpi4py import MPI
 from typing import Optional
 
+def recursive_halving_doubling_allreduce_mpi(output_tensor: torch.Tensor,
+                                                input_tensor: torch.Tensor,
+                                                group: Optional[MPI.Comm] = None,
+                                                async_op: bool = False,):
+    """
+    Performs a recursive halving and doubling based all-reduce on CUDA tensors using MPI point-to-point
+    Sendrecv operations.
+
+    Each process starts with a 1D input_tensor (block_size) and the final output_tensor 
+    is a 1D tensor of size (block_size). The goal is to reduce (using op, e.g. torch.add)
+    the block over all processes so that all processes end with the fully reduced block.
+    """
+    assert not async_op, "Non-blocking operations not supported"
+
+    world_size = group.Get_size()
+    
+    output_intermediate = torch.empty(input_tensor.size(0) // world_size,
+                                      device=input_tensor.device,
+                                      dtype=input_tensor.dtype)
+    recursive_halving_reduce_scatter_mpi(output_intermediate, input_tensor, group, async_op)
+    recursive_doubling_allgather_mpi(output_tensor, output_intermediate, group, async_op)
+
 def _all_reduce(
-    input_tensor: torch.Tensor, # all-reduce is inplace.
+    output_tensor: torch.Tensor,
+    input_tensor: torch.Tensor,
     group: Optional[Union[dist.ProcessGroup, MPI.Comm]] = None,
     async_op: bool = False,
+    directly_call_mpi: bool = False,
     use_rh_and_rd: bool = False,
-    use_yacl: bool = False,
-    directly_call_mpi = False,
+    use_pccl_cpp_backend: bool = False,
 ) -> Optional[Request]:
-
+    
     # Case 1: torch.distributed.ProcessGroup
     if group is None or isinstance(group, dist.ProcessGroup):
-        # Delegate to torch.distributed.all_gather
-        request = dist.all_reduce(input_tensor, 
-                                group=group, 
-                                async_op=async_op)
+        # Delegate to torch.distributed.all_reduce
+        
+        # all_reduce_into_tensor doesn't exist...
+        # Copy input tensor to output tensor
+        output_tensor.copy_(input_tensor)
+        request = dist.all_reduce(output_tensor,
+                                  group=group,
+                                  async_op=async_op)
+    
     # Case 2: mpi4py.MPI.Comm
     elif isinstance(group, MPI.Comm):
-        # make sure that the cpu is synchronized with the current stream
-        if not directly_call_mpi:
-            if use_yacl:
-                import yacl 
-                yacl.all_reduce_mpi(input_tensor, group, "recursive" if use_rh_and_rd else "ring")
-            
+        if use_pccl_cpp_backend:
+            import pccl as pccl_cpp
+            request = pccl_cpp.all_reduce_mpi(output_tensor,
+                                              input_tensor,
+                                              group,
+                                              "recursive")
         else:
-            output_tensor = torch.empty_like(input_tensor)
-            request = group.Allreduce(input_tensor, output_tensor)
-            input_tensor.copy_(output_tensor)
+            if not directly_call_mpi:
+                if use_rh_and_rd:
+                    request = recursive_halving_doubling_allreduce_mpi(output_tensor, input_tensor, group, async_op)
+                else:
+                    # TODO: allreduce ring? (no current allgather ring implementation)
+                    # request = ring_allreduce_mpi(output_tensor, input_tensor, group, async_op)
+                    raise Exception("ring allreduce currently not implemented")
+            else:
+                torch.cuda.current_stream().synchronize()
+                if async_op:
+                    request = group.Iallreduce(input_tensor, output_tensor)
+                else:
+                    request = group.Allreduce(input_tensor, output_tensor)
 
-        request = None
-    else:
-        raise TypeError(
-            f"Unsupported group type: {type(group)}. "
-            "Expected torch.distributed.ProcessGroup or mpi4py.MPI.Comm."
-        )
-    return request 
+    return request
 
-def reduce_scatter_2D(output_tensor: torch.Tensor,
+def all_reduce_2D(output_tensor: torch.Tensor,
     input_tensor: torch.Tensor,
     group: Optional[ProcessGroups] = None,
     async_op: bool = False,
-    use_rh: bool = False):
-
+    use_rh_and_rd: bool = False,
+    use_pccl_cpp_backend: bool = False):
+    
     assert not async_op, "Non blocking version not implemented"
-
+    
     assert input_tensor.dim() == 1 and output_tensor.dim() == 1, "all_gather_2D only admits 1D tensors"
-    intra_node_group_size, inter_node_group_size = group.get_world_size()
 
-    # step 1: on-device permutation 
-    world_size = inter_node_group_size * intra_node_group_size
-    output_msg_size = input_tensor.size(0) // world_size
-    input_splits = torch.split(input_tensor, split_size_or_sections=output_msg_size)
-    permuted_tensors = []
-    for i in range(intra_node_group_size):
-        idxes = list(np.arange(i, world_size, intra_node_group_size))
-        permuted_tensors.extend([input_splits[idx] for idx in idxes])
-    input_permuted = torch.cat(permuted_tensors)
+    # Step-1 2-dim reduce-scatter
+    reduce_scatter_2D(output_tensor, input_tensor, group, async_op, use_rh_and_rd, use_pccl_cpp_backend)
 
-    # Step-2 intra-node reduce-scatter
-    output_intermediate = torch.empty(input_permuted.size(0) // intra_node_group_size, 
-                                      device=input_tensor.device, 
-                                      dtype=input_tensor.dtype)
-    _reduce_scatter(output_intermediate, input_permuted, group.get_inner_group(), async_op=False, use_rh=use_rh)
-
-    # Step-2 inter-node 
-    _reduce_scatter(output_tensor, output_intermediate, group.get_outer_group(), async_op=False, use_rh=use_rh)
-
-
-
-
-
+    # Step-2 2-dim all-gather
+    all_gather_2D(output_tensor, input_tensor, group, async_op, use_rh_and_rd, use_pccl_cpp_backend)
