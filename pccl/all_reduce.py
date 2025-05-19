@@ -1,7 +1,3 @@
-# write an all gather function that can use either nccl or mpi.
-#  
-# all_gather.py
-
 import torch
 import torch.distributed as dist
 from mpi4py import MPI
@@ -9,7 +5,6 @@ from typing import List, Optional, Union
 from .request import Request
 from .process_groups import ProcessGroups
 import numpy as np
-from .utils import _torch_to_mpi
 from .all_gather import all_gather_2D, recursive_doubling_allgather_mpi
 from .reduce_scatter import reduce_scatter_2D, recursive_halving_reduce_scatter_mpi
 
@@ -58,6 +53,7 @@ def _all_reduce(
         # all_reduce_into_tensor doesn't exist...
         # Copy input tensor to output tensor
         output_tensor.copy_(input_tensor)
+        print("nccl thru torch")
         request = dist.all_reduce(output_tensor,
                                   group=group,
                                   async_op=async_op)
@@ -65,6 +61,8 @@ def _all_reduce(
     # Case 2: mpi4py.MPI.Comm
     elif isinstance(group, MPI.Comm):
         if use_pccl_cpp_backend:
+            print("pccl directly")
+            print("group size", group.Get_size())
             import pccl as pccl_cpp
             request = pccl_cpp.all_reduce_mpi(output_tensor,
                                               input_tensor,
@@ -73,12 +71,15 @@ def _all_reduce(
         else:
             if not directly_call_mpi:
                 if use_rh_and_rd:
+                    print("recursive_halving_doubling")
                     request = recursive_halving_doubling_allreduce_mpi(output_tensor, input_tensor, group, async_op)
                 else:
+                    print("allreduce ring")
                     # TODO: allreduce ring? (no current allgather ring implementation)
                     # request = ring_allreduce_mpi(output_tensor, input_tensor, group, async_op)
                     raise Exception("ring allreduce currently not implemented")
             else:
+                print("MPI directly")
                 torch.cuda.current_stream().synchronize()
                 if async_op:
                     request = group.Iallreduce(input_tensor, output_tensor)
@@ -98,16 +99,21 @@ def all_reduce_2D(output_tensor: torch.Tensor,
     
     assert input_tensor.dim() == 1 and output_tensor.dim() == 1, "all_gather_2D only admits 1D tensors"
 
-    intra_node_group_size, inter_node_group_size = group.get_world_size()
-    world_size = intra_node_group_size * inter_node_group_size
-    output_intermediate = torch.empty(input_tensor.size(0) // world_size,
-                                      device=input_tensor.device,
-                                      dtype=input_tensor.dtype)
+    # TESTING cpp allreduce
+    output_intermediate = torch.empty(input_tensor.size(0), device=input_tensor.device, dtype=input_tensor.dtype)
+    # Step-1 inter-node all-gather 
+    _all_reduce(output_intermediate, input_tensor, group.get_outer_group(), async_op=False, use_rh_and_rd=True, use_pccl_cpp_backend=True, directly_call_mpi=True)
+    # Step-2 intra-node all-gather
+    _all_reduce(output_tensor, output_intermediate, group.get_inner_group(), async_op=False, use_rh_and_rd=True, use_pccl_cpp_backend=True, directly_call_mpi=True)
 
-    # Step-1 2-dim reduce-scatter
-    reduce_scatter_2D(output_intermediate, input_tensor, group, async_op, use_rh_and_rd, use_pccl_cpp_backend)
+    # intra_node_group_size, inter_node_group_size = group.get_world_size()
+    # world_size = intra_node_group_size * inter_node_group_size
+    # output_intermediate = torch.empty(input_tensor.size(0) // world_size,
+    #                                   device=input_tensor.device,
+    #                                   dtype=input_tensor.dtype)
 
-    # Step-2 2-dim all-gather
-    all_gather_2D(output_tensor, output_intermediate, group, async_op, use_rh_and_rd, use_pccl_cpp_backend)
-    
+    # # Step-1 2-dim reduce-scatter
+    # reduce_scatter_2D(output_intermediate, input_tensor, group, async_op, use_rh_and_rd, use_pccl_cpp_backend)
 
+    # # Step-2 2-dim all-gather
+    # all_gather_2D(output_tensor, output_intermediate, group, async_op, use_rh_and_rd, use_pccl_cpp_backend)
