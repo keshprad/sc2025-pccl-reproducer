@@ -3,11 +3,13 @@
 
 #include <mpi.h>
 
-void recursiveDoublingAllReduceGPU(void* output, 
-                                  const void* input, 
+void recursiveHalvingDoublingAllReduceGPU(float* output, 
+                                  const float* input, 
                                   int total_elems, 
-                                  void* buf,  
-                                  void* recv_buf,  
+                                  float* buf,  
+                                  float* recv_buf,  
+                                  float* recv_buf2,  
+                                  float* intermediate_buf,  
                                   MPI_Comm comm = MPI_COMM_WORLD);
 
 #endif // ALL_REDUCE_H

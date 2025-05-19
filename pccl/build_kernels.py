@@ -101,6 +101,7 @@ def build():
     extra_c_flags += ['-O3', '-std=c++17', "-I"+mpi4py.get_include()] 
     sources=[srcpath / 'pccl.cpp', 
              srcpath / 'all_gather.cpp', 
+             srcpath / 'all_reduce.cpp', 
              srcpath / 'reduce_scatter.cpp',
              srcpath / 'common.cu']
 

@@ -98,8 +98,16 @@ def all_reduce_2D(output_tensor: torch.Tensor,
     
     assert input_tensor.dim() == 1 and output_tensor.dim() == 1, "all_gather_2D only admits 1D tensors"
 
+    intra_node_group_size, inter_node_group_size = group.get_world_size()
+    world_size = intra_node_group_size * inter_node_group_size
+    output_intermediate = torch.empty(input_tensor.size(0) // world_size,
+                                      device=input_tensor.device,
+                                      dtype=input_tensor.dtype)
+
     # Step-1 2-dim reduce-scatter
-    reduce_scatter_2D(output_tensor, input_tensor, group, async_op, use_rh_and_rd, use_pccl_cpp_backend)
+    reduce_scatter_2D(output_intermediate, input_tensor, group, async_op, use_rh_and_rd, use_pccl_cpp_backend)
 
     # Step-2 2-dim all-gather
-    all_gather_2D(output_tensor, input_tensor, group, async_op, use_rh_and_rd, use_pccl_cpp_backend)
+    all_gather_2D(output_tensor, output_intermediate, group, async_op, use_rh_and_rd, use_pccl_cpp_backend)
+    
+
