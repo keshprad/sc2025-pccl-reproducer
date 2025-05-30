@@ -4,6 +4,7 @@
 #include <mpi4py/mpi4py.h>
 #include "reduce_scatter.h"
 #include "all_gather.h"
+#include "all_reduce.h"
 
 
 namespace py = pybind11;
