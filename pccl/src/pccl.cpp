@@ -189,7 +189,6 @@ void all_reduce_mpi(const torch::Tensor& output_tensor,
         // therefore these calls are low overheads
         auto tmp_wrkspace_tensor_1 = torch::empty_like(input_tensor);
         auto tmp_wrkspace_tensor_2 = torch::empty_like(input_tensor);
-        auto tmp_wrkspace_tensor_3 = torch::empty_like(input_tensor);
         auto tmp_wrkspace_tensor_4 = torch::empty({block_size / size}, input_tensor.options());
 
         recursiveHalvingDoublingAllReduceGPU(output_ptr, 
@@ -197,7 +196,6 @@ void all_reduce_mpi(const torch::Tensor& output_tensor,
             total_elems,
             tmp_wrkspace_tensor_1.data_ptr<float>(),
             tmp_wrkspace_tensor_2.data_ptr<float>(),
-            tmp_wrkspace_tensor_3.data_ptr<float>(),
             tmp_wrkspace_tensor_4.data_ptr<float>(),
             comm);
     } else {

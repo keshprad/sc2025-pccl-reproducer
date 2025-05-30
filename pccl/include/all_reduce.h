@@ -8,7 +8,6 @@ void recursiveHalvingDoublingAllReduceGPU(float* output,
                                   int total_elems, 
                                   float* buf,  
                                   float* recv_buf,  
-                                  float* recv_buf2,  
                                   float* intermediate_buf,  
                                   MPI_Comm comm = MPI_COMM_WORLD);
 

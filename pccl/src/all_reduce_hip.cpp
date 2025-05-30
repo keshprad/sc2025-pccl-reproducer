@@ -22,14 +22,10 @@ void recursiveHalvingDoublingAllReduceGPU(float* output,
                                 int total_elems,
                                 float* buf,                 // Same as input size
                                 float* recv_buf,            // Same as input size
-                                float* recv_buf2,           // Same as input size
                                 float* intermediate_buf,    // Input size / world size
                                 MPI_Comm comm) {
-    
-    auto stream = at::hip::getCurrentHIPStreamMasqueradingAsCUDA();
-    
     recursiveHalvingReduceScatterGPU(intermediate_buf, input, total_elems, buf, recv_buf, comm);
 
     // allgather uses void* so multiply total_elems by size of float dtype
-    recursiveDoublingAllGatherGPU(output, intermediate_buf, total_elems*sizeof(float), recv_buf2, comm);
+    recursiveDoublingAllGatherGPU(output, intermediate_buf, total_elems*sizeof(float), recv_buf, comm);
 }

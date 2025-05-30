@@ -8,12 +8,13 @@ export WRKSPC=/lustre/orion/$PROJ_NAME/scratch/$USER/
 VENV_NAME="pccl-venv"
 
 module load cray-mpich/8.1.31
-module load amd-mixed/6.2.4
+# module load amd-mixed/6.2.4
+module load rocm/6.2.4
 module load cpe/24.11
 module load craype-accel-amd-gfx90a
 module load cray-python/3.10.10
 module load craype-accel-amd-gfx90a
-module load rocm
+# module load rocm
 module load ninja
 export CXX=CC 
 export CC=cc
@@ -66,9 +67,10 @@ CPU_MASK="--cpu-bind=mask_cpu:${MASK_0},${MASK_1},${MASK_2},${MASK_3},${MASK_4},
 # collecting counter data
 #export MPICH_OFI_CXI_COUNTER_REPORT=5
 
-SCRIPT="python -u benchmark_raw_collectives/all_gather.py \
+SCRIPT="python -u benchmark_raw_collectives/all_reduce.py \
         --num-gpus-per-node $GPUS_PER_NODE \
-        --machine perlmutter \
+        --machine frontier \
+        --pccl-recursive-alg \
         --library pccl --test"
 
 
@@ -78,6 +80,3 @@ export PYTHONPATH="$PYTHONPATH:."
 run_cmd="srun -N $NNODES -n $GPUS --ntasks-per-node=8 -c 7 ${CPU_MASK} --mem-bind=map_mem:3,3,1,1,0,0,2,2  bash -c 'ulimit -c 0; exec $SCRIPT'"
 echo $run_cmd 
 eval $run_cmd 
-
-
-

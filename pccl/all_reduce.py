@@ -53,7 +53,6 @@ def _all_reduce(
         # all_reduce_into_tensor doesn't exist...
         # Copy input tensor to output tensor
         output_tensor.copy_(input_tensor)
-        print("nccl thru torch")
         request = dist.all_reduce(output_tensor,
                                   group=group,
                                   async_op=async_op)
@@ -61,7 +60,6 @@ def _all_reduce(
     # Case 2: mpi4py.MPI.Comm
     elif isinstance(group, MPI.Comm):
         if use_pccl_cpp_backend:
-            print("cpp")
             import pccl as pccl_cpp
             request = pccl_cpp.all_reduce_mpi(output_tensor,
                                               input_tensor,
@@ -70,14 +68,12 @@ def _all_reduce(
         else:
             if not directly_call_mpi:
                 if use_rh_and_rd:
-                    print("python")
                     request = recursive_halving_doubling_allreduce_mpi(output_tensor, input_tensor, group, async_op)
                 else:
                     # TODO: allreduce ring? (no current allgather ring implementation)
                     # request = ring_allreduce_mpi(output_tensor, input_tensor, group, async_op)
                     raise Exception("ring allreduce currently not implemented")
             else:
-                print("MPI directly")
                 torch.cuda.current_stream().synchronize()
                 if async_op:
                     request = group.Iallreduce(input_tensor, output_tensor)
@@ -97,7 +93,7 @@ def all_reduce_2D(output_tensor: torch.Tensor,
     
     assert input_tensor.dim() == 1 and output_tensor.dim() == 1, "all_gather_2D only admits 1D tensors"
 
-    # TESTING cpp allreduce
+    # # TESTING cpp allreduce
     # output_intermediate = torch.empty(input_tensor.size(0), device=input_tensor.device, dtype=input_tensor.dtype)
     # # Step-1 inter-node all-reduce 
     # _all_reduce(output_intermediate, input_tensor, group.get_outer_group(), async_op=False, use_rh_and_rd=True, use_pccl_cpp_backend=True, directly_call_mpi=True)
