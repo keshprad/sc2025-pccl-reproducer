@@ -39,7 +39,7 @@ if __name__ == "__main__":
     parser.add_argument("--dtype",
                         type=str,
                         choices=["bf16", "fp32"],
-                        default="bf16")
+                        default="fp32")
     args = parser.parse_args()
     
     if args.use_pccl_cpp_backend:
@@ -85,8 +85,9 @@ if __name__ == "__main__":
                 print(f"output size = {size} {unit}")
             mult = 2**20 if unit == "MB" else 2**10
             
-            output_buffer_numel = size * (mult) // 4 if args.dtype == "fp32" else size * (mult) // 2
             dtype = torch.float32 if args.dtype == "fp32" else torch.bfloat16
+            dtype_size = 4 if args.dtype == "fp32" else 2
+            output_buffer_numel = size * (mult) // dtype_size
             input_buffer_numel = output_buffer_numel // dist.get_world_size()
             output_tensor = torch.empty((output_buffer_numel,), dtype=dtype, device="cuda")
             input_tensor = torch.randn((input_buffer_numel,), dtype=dtype, device="cuda")

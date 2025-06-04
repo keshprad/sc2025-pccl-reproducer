@@ -12,10 +12,11 @@
 //  - input: CUDA device pointer to the local block of size block_size.
 //  - total_elems: total number of elements in output (P * block_size).
 //  - comm: MPI communicator (default MPI_COMM_WORLD).
-void recursiveDoublingAllGatherGPU(void* output, 
-                                  const void* input, 
+template<typename T>
+void recursiveDoublingAllGatherGPU(T* output, 
+                                  const T* input, 
                                   int total_elems, 
-                                  void* recv_buf,  // Same as output size
+                                  T* recv_buf,  // Same as output size
                                   MPI_Comm comm) {
     
     int rank, size;
@@ -28,9 +29,9 @@ void recursiveDoublingAllGatherGPU(void* output,
     auto stream = at::cuda::getCurrentCUDAStream();
 
     // Copy local input into its designated block in the output buffer.
-    CUDA_CHECK(cudaMemcpyAsync(static_cast<char*>(output) + rank * block_size, 
-                             input, 
-                             block_size, 
+    CUDA_CHECK(cudaMemcpyAsync(static_cast<void*>(output + (rank * block_size)), 
+                             static_cast<const void*>(input), 
+                             block_size * sizeof(T), 
                              cudaMemcpyDeviceToDevice, 
                              stream));
 
@@ -58,8 +59,8 @@ void recursiveDoublingAllGatherGPU(void* output,
         // Wait for the copy to complete.
         CUDA_CHECK(cudaEventSynchronize(stream_sync_event));
         
-        MPI_Sendrecv(static_cast<char*>(output) + send_offset, count, MPI_BYTE, partner, 0,
-                     static_cast<char*>(output) + recv_offset, count, MPI_BYTE, partner, 0,
+        MPI_Sendrecv(output + send_offset, count * sizeof(T), MPI_BYTE, partner, 0,
+                     output + recv_offset, count * sizeof(T), MPI_BYTE, partner, 0,
                      comm, MPI_STATUS_IGNORE);
         
         seg_size *= 2;
@@ -67,3 +68,15 @@ void recursiveDoublingAllGatherGPU(void* output,
     
     CUDA_CHECK(cudaEventDestroy(stream_sync_event));
 }
+// Explicit instantiation for fp32
+template void recursiveDoublingAllGatherGPU(float* output, 
+    const float* input, 
+    int total_elems, 
+    float* recv_buf,  // Same as output size
+    MPI_Comm comm);
+// Explicit instantiation for bf16
+template void recursiveDoublingAllGatherGPU(__nv_bfloat16* output, 
+    const __nv_bfloat16* input, 
+    int total_elems, 
+    __nv_bfloat16* recv_buf,  // Same as output size
+    MPI_Comm comm);

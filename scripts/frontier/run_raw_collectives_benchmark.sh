@@ -67,10 +67,11 @@ CPU_MASK="--cpu-bind=mask_cpu:${MASK_0},${MASK_1},${MASK_2},${MASK_3},${MASK_4},
 # collecting counter data
 #export MPICH_OFI_CXI_COUNTER_REPORT=5
 
-SCRIPT="python -u benchmark_raw_collectives/all_reduce.py \
+SCRIPT="python -u benchmark_raw_collectives/all_gather.py \
         --num-gpus-per-node $GPUS_PER_NODE \
         --machine frontier \
         --pccl-recursive-alg \
+        --dtype bf16 \
         --library pccl --test"
 
 

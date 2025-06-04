@@ -40,6 +40,10 @@ if __name__ == "__main__":
     parser.add_argument("--pccl-recursive-alg", 
                         action="store_true",
                         help="Use the recursive doubling algorithm for PCCL.")
+    parser.add_argument("--dtype",
+                        type=str,
+                        choices=["bf16", "fp32"],
+                        default="fp32")
     
     args = parser.parse_args()
     if args.use_pccl_cpp_backend:
@@ -83,11 +87,13 @@ if __name__ == "__main__":
             if dist.get_rank() == 0:
                 print(f"output size = {size} {unit}")
             mult = 2**20 if unit == "MB" else 2**10
-            input_buffer_numel = size * (mult) // 4 
+            dtype = torch.float32 if args.dtype == "fp32" else torch.bfloat16
+            elem_size = 4 if args.dtype == "fp32" else 2
+            input_buffer_numel = size * (mult) // elem_size
             output_buffer_numel = input_buffer_numel // dist.get_world_size()
 
-            output_tensor = torch.empty((output_buffer_numel,), dtype=torch.float32, device="cuda")
-            input_tensor = torch.randn((input_buffer_numel,), dtype=torch.float32, device="cuda")
+            output_tensor = torch.empty((output_buffer_numel,), dtype=dtype, device="cuda")
+            input_tensor = torch.randn((input_buffer_numel,), dtype=dtype, device="cuda")
             
             kwargs = {}
             if args.library == "mpi":
@@ -99,7 +105,7 @@ if __name__ == "__main__":
            
             #gold
             if args.test:
-                output_tensor_gold = torch.empty((output_buffer_numel,), dtype=torch.float32, device="cuda")
+                output_tensor_gold = torch.empty((output_buffer_numel,), dtype=dtype, device="cuda")
                 _reduce_scatter(output_tensor_gold, input_tensor)
                 assert allclose(output_tensor, output_tensor_gold)
 

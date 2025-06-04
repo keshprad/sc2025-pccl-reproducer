@@ -39,16 +39,9 @@ void reduce_scatter_mpi(const torch::Tensor& output_tensor,
     TORCH_CHECK(output_tensor.numel() == block_size,
     "Output tensor must have block_size elements (input tensor numel()/world_size)");
 
-    // Check type: must be float.
-    TORCH_CHECK(input_tensor.scalar_type() == at::kFloat,
-    "Input tensor must be of type float");
-    TORCH_CHECK(output_tensor.scalar_type() == at::kFloat,
-    "Output tensor must be of type float");
-
-    // Get raw device pointers (assumes tensors reside on GPU).
-    float* output_ptr = output_tensor.data_ptr<float>();
-    float* input_ptr  = input_tensor.data_ptr<float>();
-    
+    // Check input/output types are same
+    TORCH_CHECK(input_tensor.scalar_type() == output_tensor.scalar_type(),
+    "Input tensor and output tensor must be same type");
     
     // Call the corresponding GPU reduce-scatter algorithm.
     if (algorithm == "recursive") {
@@ -58,12 +51,33 @@ void reduce_scatter_mpi(const torch::Tensor& output_tensor,
         // therefore these calls are low overheads
         auto tmp_wrkspace_tensor_1 = torch::empty_like(input_tensor);
         auto tmp_wrkspace_tensor_2 = torch::empty_like(input_tensor);
-        recursiveHalvingReduceScatterGPU(output_ptr, 
-            input_ptr, 
-            total_elems,
-            tmp_wrkspace_tensor_1.data_ptr<float>(),
-            tmp_wrkspace_tensor_2.data_ptr<float>(),
-            comm);
+
+        // Check for fp32 or bf16
+        if (output_tensor.scalar_type() == at::kFloat) {
+            // Handle float32 case
+            // perform reduce scatter
+            recursiveHalvingReduceScatterGPU(
+                // Get raw device pointers (assumes tensors reside on GPU).
+                output_tensor.data_ptr<float>(), 
+                input_tensor.data_ptr<float>(),
+                total_elems,
+                tmp_wrkspace_tensor_1.data_ptr<float>(),
+                tmp_wrkspace_tensor_2.data_ptr<float>(),
+                comm);
+        } else if (output_tensor.scalar_type() == at::kBFloat16) {
+            // Handle bfloat16 case - using CUDA/HIP native type
+            // perform reduce scatter            
+            recursiveHalvingReduceScatterGPU(
+                // Get raw device pointers (assumes tensors reside on GPU).
+                reinterpret_cast<__nv_bfloat16*>(output_tensor.data_ptr<at::BFloat16>()), 
+                reinterpret_cast<const __nv_bfloat16*>(input_tensor.data_ptr<at::BFloat16>()),
+                total_elems,
+                reinterpret_cast<__nv_bfloat16*>(tmp_wrkspace_tensor_1.data_ptr<at::BFloat16>()),
+                reinterpret_cast<__nv_bfloat16*>(tmp_wrkspace_tensor_2.data_ptr<at::BFloat16>()),
+                comm);
+        } else {
+            TORCH_CHECK(false, "Unsupported data type for all_gather_mpi. Only float32 and bfloat16 are supported.");
+        }
     } else if (algorithm == "ring") {
         // always use torch tensors. do NOT use malloc.
         // malloc's have high overheads and will slow your communication down
@@ -73,13 +87,32 @@ void reduce_scatter_mpi(const torch::Tensor& output_tensor,
         auto tmp_wrkspace_tensor_2 = torch::empty_like(output_tensor);
         auto tmp_wrkspace_tensor_3 = torch::empty_like(output_tensor);
 
-        ringReduceScatterGPU(output_ptr, 
-            input_ptr, 
-            total_elems, 
-            tmp_wrkspace_tensor_1.data_ptr<float>(),
-            tmp_wrkspace_tensor_2.data_ptr<float>(),
-            tmp_wrkspace_tensor_3.data_ptr<float>(),
-            comm);
+        // Check for fp32 or bf16
+        if (output_tensor.scalar_type() == at::kFloat) {
+            // Handle float32 case
+            ringReduceScatterGPU(
+                // Get raw device pointers (assumes tensors reside on GPU).
+                output_tensor.data_ptr<float>(), 
+                input_tensor.data_ptr<float>(), 
+                total_elems, 
+                tmp_wrkspace_tensor_1.data_ptr<float>(),
+                tmp_wrkspace_tensor_2.data_ptr<float>(),
+                tmp_wrkspace_tensor_3.data_ptr<float>(),
+                comm);
+        } else if (output_tensor.scalar_type() == at::kBFloat16) {
+            // Handle bfloat16 case - using CUDA/HIP native type
+            ringReduceScatterGPU(
+                // Get raw device pointers (assumes tensors reside on GPU).
+                reinterpret_cast<__nv_bfloat16*>(output_tensor.data_ptr<at::BFloat16>()), 
+                reinterpret_cast<__nv_bfloat16*>(input_tensor.data_ptr<at::BFloat16>()), 
+                total_elems, 
+                reinterpret_cast<__nv_bfloat16*>(tmp_wrkspace_tensor_1.data_ptr<at::BFloat16>()),
+                reinterpret_cast<__nv_bfloat16*>(tmp_wrkspace_tensor_2.data_ptr<at::BFloat16>()),
+                reinterpret_cast<__nv_bfloat16*>(tmp_wrkspace_tensor_3.data_ptr<at::BFloat16>()),
+                comm);
+        } else {
+            TORCH_CHECK(false, "Unsupported data type for all_gather_mpi. Only float32 and bfloat16 are supported.");
+        }
     } else {
     TORCH_CHECK(false, "Unknown algorithm specified for reduce_scatter_mpi: ", algorithm);
     }
@@ -116,27 +149,40 @@ void all_gather_mpi(const torch::Tensor& output_tensor,
     TORCH_CHECK(output_tensor.numel() == total_elems,
     "Output tensor must have total_elem elements (input tensor numel() *world_size)");
 
-    // Get raw device pointers (assumes tensors reside on GPU).
-    void* output_ptr = output_tensor.data_ptr();
-    const void* input_ptr  = input_tensor.data_ptr();
-    
     // Get dtype size for generic handling
     int dtype_size = output_tensor.element_size();  
     
-    // Call the corresponding GPU reduce-scatter algorithm.
+    // Call the corresponding GPU all-gather algorithm.
     if (algorithm == "recursive") {
         // always use torch tensors. do NOT use malloc.
         // malloc's have high overheads and will slow your communication down
         // torch mallocs memory in advance and manages it internally.
         // therefore these calls are low overheads
         auto tmp_wrkspace_tensor_1 = torch::empty_like(output_tensor);
-        //auto tmp_wrkspace_tensor_2 = torch::empty_like(input_tensor);
-        recursiveDoublingAllGatherGPU(output_ptr, 
-            input_ptr, 
-            total_elems * dtype_size,
-            tmp_wrkspace_tensor_1.data_ptr(),
-            //tmp_wrkspace_tensor_2.data_ptr(),
-            comm);
+        
+        if (output_tensor.scalar_type() == at::kFloat) {
+            // Handle float32 case
+            float* output_ptr = output_tensor.data_ptr<float>();
+            const float* input_ptr = input_tensor.data_ptr<float>();
+            
+            recursiveDoublingAllGatherGPU(output_ptr, 
+                input_ptr, 
+                total_elems,
+                tmp_wrkspace_tensor_1.data_ptr<float>(),
+                comm);
+        } else if (output_tensor.scalar_type() == at::kBFloat16) {
+            // Handle bfloat16 case - using CUDA/HIP native type
+            __nv_bfloat16* output_ptr = reinterpret_cast<__nv_bfloat16*>(output_tensor.data_ptr<at::BFloat16>());
+            const __nv_bfloat16* input_ptr = reinterpret_cast<const __nv_bfloat16*>(input_tensor.data_ptr<at::BFloat16>());
+            
+            recursiveDoublingAllGatherGPU(output_ptr, 
+                input_ptr, 
+                total_elems,
+                reinterpret_cast<__nv_bfloat16*>(tmp_wrkspace_tensor_1.data_ptr<at::BFloat16>()),
+                comm);
+        } else {
+            TORCH_CHECK(false, "Unsupported data type for all_gather_mpi. Only float32 and bfloat16 are supported.");
+        }
     } else {
     TORCH_CHECK(false, "Unknown algorithm specified for all_gather_mpi: ", algorithm);
     }
