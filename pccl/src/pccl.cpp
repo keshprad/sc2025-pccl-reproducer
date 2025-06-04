@@ -222,10 +222,6 @@ void all_reduce_mpi(const torch::Tensor& output_tensor,
     // Ensure input tensor divisible by world size.
     TORCH_CHECK(block_size % size == 0, 
         "Input tensor size must be divisible by world_size for recursive halving algorithm");
-
-    // Get raw device pointers (assumes tensors reside on GPU).
-    float* output_ptr = output_tensor.data_ptr<float>();
-    const float* input_ptr  = input_tensor.data_ptr<float>();
     
     // Call the corresponding GPU reduce-scatter algorithm.
     if (algorithm == "recursive") {
@@ -237,15 +233,37 @@ void all_reduce_mpi(const torch::Tensor& output_tensor,
         auto tmp_wrkspace_tensor_2 = torch::empty_like(input_tensor);
         auto tmp_wrkspace_tensor_4 = torch::empty({block_size / size}, input_tensor.options());
 
-        recursiveHalvingDoublingAllReduceGPU(output_ptr, 
-            input_ptr, 
-            total_elems,
-            tmp_wrkspace_tensor_1.data_ptr<float>(),
-            tmp_wrkspace_tensor_2.data_ptr<float>(),
-            tmp_wrkspace_tensor_4.data_ptr<float>(),
-            comm);
+        if (output_tensor.scalar_type() == at::kFloat) {
+            // Handle float32 case
+            // Get raw device pointers (assumes tensors reside on GPU).
+            float* output_ptr = output_tensor.data_ptr<float>();
+            const float* input_ptr = input_tensor.data_ptr<float>();
+            
+            recursiveHalvingDoublingAllReduceGPU(output_ptr, 
+                input_ptr, 
+                total_elems,
+                tmp_wrkspace_tensor_1.data_ptr<float>(),
+                tmp_wrkspace_tensor_2.data_ptr<float>(),
+                tmp_wrkspace_tensor_4.data_ptr<float>(),
+                comm);
+        } else if (output_tensor.scalar_type() == at::kBFloat16) {
+            // Handle bfloat16 case - using CUDA/HIP native type
+            // Get raw device pointers (assumes tensors reside on GPU).
+            __nv_bfloat16* output_ptr = reinterpret_cast<__nv_bfloat16*>(output_tensor.data_ptr<at::BFloat16>());
+            const __nv_bfloat16* input_ptr = reinterpret_cast<const __nv_bfloat16*>(input_tensor.data_ptr<at::BFloat16>());
+            
+            recursiveHalvingDoublingAllReduceGPU(output_ptr, 
+                input_ptr, 
+                total_elems,
+                reinterpret_cast<__nv_bfloat16*>(tmp_wrkspace_tensor_1.data_ptr<at::BFloat16>()),
+                reinterpret_cast<__nv_bfloat16*>(tmp_wrkspace_tensor_2.data_ptr<at::BFloat16>()),
+                reinterpret_cast<__nv_bfloat16*>(tmp_wrkspace_tensor_4.data_ptr<at::BFloat16>()),
+                comm);
+        } else {
+            TORCH_CHECK(false, "Unsupported data type for all_reduce_mpi. Only float32 and bfloat16 are supported.");
+        }
     } else {
-    TORCH_CHECK(false, "Unknown algorithm specified for all_reduce_mpi: ", algorithm);
+        TORCH_CHECK(false, "Unknown algorithm specified for all_reduce_mpi: ", algorithm);
     }
 }
 

@@ -38,7 +38,7 @@ if __name__ == "__main__":
                         help="Use the recursive doubling algorithm for PCCL.")
     parser.add_argument("--dtype",
                         type=str,
-                        choices=["fp32"], # TODO: support bf16 (currently reduce_scatter doesnt)
+                        choices=["bf16", "fp32"],
                         default="fp32")
     args = parser.parse_args()
 
@@ -88,7 +88,7 @@ if __name__ == "__main__":
             device = "cuda"
 
             # calculate input and output numel 
-            elem_size = 4
+            elem_size = 4 if args.dtype == "fp32" else 2
             numel = size * mult // elem_size
             input_buffer_numel = output_buffer_numel = numel
 
