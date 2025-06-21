@@ -32,8 +32,8 @@ def time_something(fn, *args, warmup_iters=5, timed_iters=20, prof=None, **kwarg
     torch.cuda.synchronize()
     return start_event.elapsed_time(end_event) / timed_iters
 
-def allclose(x, y, pct=2.0):
-    mask = torch.isclose(x, y, rtol=1e-5)
+def allclose(x, y, pct=2.0, rtol=1e-5):
+    mask = torch.isclose(x, y, rtol=rtol)
     pct_diff = (mask.numel() - mask.sum()) / mask.numel() * 100
     if pct_diff > pct:
         print(x[torch.logical_not(mask)], y[torch.logical_not(mask)])

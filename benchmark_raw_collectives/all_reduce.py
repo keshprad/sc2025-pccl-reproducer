@@ -68,7 +68,7 @@ if __name__ == "__main__":
         pg = None # None is mapped to comm-world in torch.dist + xccl
         function = _all_reduce
     
-    data_folder = f"./data/all_reduce/{args.machine}"
+    data_folder = f"./data/all_reduce/{args.dtype}/{args.machine}"
     os.makedirs(data_folder, exist_ok=True)
 
     csv_filename = os.path.join(data_folder,
@@ -79,6 +79,7 @@ if __name__ == "__main__":
         # Write the header
         header = ["gpu_count", "slurm_job_id", "output_size", "unit", f"time_{args.library}"]
         writer.writerow(header)
+        f.flush()
 
         for size in sizes:
             if dist.get_rank() == 0:
@@ -93,8 +94,9 @@ if __name__ == "__main__":
             input_buffer_numel = output_buffer_numel = numel
 
             # create input/output tensors
+            stddev = 1 if args.dtype == "fp32" else 0.1
             output_tensor = torch.empty((output_buffer_numel,), dtype=dtype, device=device)
-            input_tensor = torch.randn((input_buffer_numel,), dtype=dtype, device=device)
+            input_tensor = torch.randn((input_buffer_numel,), dtype=dtype, device=device) * stddev
 
             kwargs = {}
             if args.library == "mpi":
@@ -107,15 +109,19 @@ if __name__ == "__main__":
             # gold
             if args.test:
                 output_tensor_gold = torch.empty((output_buffer_numel,), dtype=dtype, device=device)
-                _all_reduce(output_tensor_gold, input_tensor)
-                assert allclose(output_tensor, output_tensor_gold)
+                time_nccl = time_something(_all_reduce, output_tensor_gold, input_tensor)
+                rtol = 1e-5 if args.dtype == "fp32" else 1e-2
+                assert allclose(output_tensor, output_tensor_gold, rtol=rtol)
             
             if dist.get_rank() == 0:
                 print(f"time_{args.library} = {time:.2f} ms")
+                if args.test:
+                    print(f"time_nccl = {time_nccl:.2f} ms")
             
             if dist.get_rank() == 0:
                 print("===============================")
                 writer.writerow([gpu_count, slurm_job_id, size, unit, time])
+                f.flush()
         
         if args.test and dist.get_rank() == 0:
             print("All tests passed! PCCL outputs match NCCL outputs")
