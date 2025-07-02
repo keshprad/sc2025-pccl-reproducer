@@ -137,6 +137,17 @@ void all_gather_mpi(const torch::Tensor& output_tensor,
             tmp_wrkspace_tensor_1.data_ptr(),
             //tmp_wrkspace_tensor_2.data_ptr(),
             comm);
+    } else if (algorithm == "ring") {
+        // always use torch tensors. do NOT use malloc.
+        // malloc's have high overheads and will slow your communication down
+        // torch mallocs memory in advance and manages it internally.
+        // therefore these calls are low overheads
+        // auto tmp_wrkspace_tensor_1 = torch::empty_like(output_tensor);
+        // No workspace tensors needed for ring all-gather algorithm
+        ringAllGatherGPU(output_ptr, 
+            input_ptr, 
+            total_elems * dtype_size,
+            comm);
     } else {
     TORCH_CHECK(false, "Unknown algorithm specified for all_gather_mpi: ", algorithm);
     }
