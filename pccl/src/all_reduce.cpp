@@ -28,3 +28,18 @@ void recursiveHalvingDoublingAllReduceGPU(float* output,
     // allgather uses void* so multiply total_elems by size of float dtype
     recursiveDoublingAllGatherGPU(output, intermediate_buf, total_elems*sizeof(float), recv_buf, comm);
 }
+
+// Performs an all-reduce on GPU tensors via ring reduce-scatter followed by ring all-gather.
+void ringAllReduceGPU(float* output,
+                    const float* input,
+                    int total_elems,
+                    float* intermediate_buf,        // Input size / world size
+                    float* d_buf,                   // Input size
+                    float* d_send,                  // Input size / world size
+                    float* d_tmp,                   // Input size / world size
+                    MPI_Comm comm) {
+    ringReduceScatterGPU(intermediate_buf, input, total_elems, d_buf, d_send, d_tmp);
+
+    // allgather uses void* so multiply total_elems by size of float dtype
+    ringAllGatherGPU(output, intermediate_buf, total_elems*sizeof(float), comm);
+}

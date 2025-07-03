@@ -96,6 +96,7 @@ if __name__ == "__main__":
                                   output_tensor, 
                                   input_tensor, 
                                   group=pg, 
+                                  directly_call_mpi = args.library == "mpi",
                                   use_rd=use_rd, 
                                   use_pccl_cpp_backend=args.use_pccl_cpp_backend)
 

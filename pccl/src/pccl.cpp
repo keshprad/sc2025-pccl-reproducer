@@ -209,6 +209,24 @@ void all_reduce_mpi(const torch::Tensor& output_tensor,
             tmp_wrkspace_tensor_2.data_ptr<float>(),
             tmp_wrkspace_tensor_4.data_ptr<float>(),
             comm);
+    } else if (algorithm == "ring") {
+        // always use torch tensors. do NOT use malloc.
+        // malloc's have high overheads and will slow your communication down
+        // torch mallocs memory in advance and manages it internally.
+        // therefore these calls are low overheads
+        auto tmp_wrkspace_tensor_1 = torch::empty({block_size / size}, input_tensor.options());
+        auto tmp_wrkspace_tensor_2 = torch::empty_like(input_tensor);
+        auto tmp_wrkspace_tensor_3 = torch::empty({block_size / size}, input_tensor.options());
+        auto tmp_wrkspace_tensor_4 = torch::empty({block_size / size}, input_tensor.options());
+        
+        ringAllReduceGPU(output_ptr,
+            input_ptr,
+            total_elems,
+            tmp_wrkspace_tensor_1.data_ptr<float>(),
+            tmp_wrkspace_tensor_2.data_ptr<float>(),
+            tmp_wrkspace_tensor_3.data_ptr<float>(),
+            tmp_wrkspace_tensor_4.data_ptr<float>(),
+            comm);
     } else {
     TORCH_CHECK(false, "Unknown algorithm specified for all_reduce_mpi: ", algorithm);
     }

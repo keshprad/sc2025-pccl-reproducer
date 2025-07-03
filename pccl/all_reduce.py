@@ -5,8 +5,8 @@ from typing import List, Optional, Union
 from .request import Request
 from .process_groups import ProcessGroups
 import numpy as np
-from .all_gather import all_gather_2D, recursive_doubling_allgather_mpi
-from .reduce_scatter import reduce_scatter_2D, recursive_halving_reduce_scatter_mpi
+from .all_gather import all_gather_2D, recursive_doubling_allgather_mpi, ring_allgather_mpi
+from .reduce_scatter import reduce_scatter_2D, recursive_halving_reduce_scatter_mpi, ring_reduce_scatter_mpi
 
 
 import torch
@@ -36,6 +36,27 @@ def recursive_halving_doubling_allreduce_mpi(output_tensor: torch.Tensor,
     recursive_halving_reduce_scatter_mpi(output_intermediate, input_tensor, group, async_op)
     recursive_doubling_allgather_mpi(output_tensor, output_intermediate, group, async_op)
 
+def ring_allreduce_mpi(output_tensor: torch.Tensor,
+                       input_tensor: torch.Tensor,
+                       group: Optional[MPI.Comm] = None, 
+                       async_op: bool = False):
+    """
+    Performs a ring based all-reduce on CUDA tensors using MPI point-to-point Sendrecv operations.
+
+    Each process starts with a 1D input_tensor (block_size) and the final output_tensor 
+    is a 1D tensor of size (block_size). The goal is to reduce (using op, e.g. torch.add)
+    the block over all processes so that all processes end with the fully reduced block.
+    """
+    assert not async_op, "Non-blocking operations not supported"
+
+    world_size = group.Get_size()
+
+    output_intermediate = torch.empty(input_tensor.size(0) // world_size,
+                                      device=input_tensor.device,
+                                      dtype=input_tensor.dtype)
+    ring_reduce_scatter_mpi(output_intermediate, input_tensor, group, async_op)
+    ring_allgather_mpi(output_tensor, output_intermediate, group, async_op)
+
 def _all_reduce(
     output_tensor: torch.Tensor,
     input_tensor: torch.Tensor,
@@ -64,15 +85,13 @@ def _all_reduce(
             request = pccl_cpp.all_reduce_mpi(output_tensor,
                                               input_tensor,
                                               group,
-                                              "recursive")
+                                              "recursive" if use_rh_and_rd else "ring")
         else:
             if not directly_call_mpi:
                 if use_rh_and_rd:
                     request = recursive_halving_doubling_allreduce_mpi(output_tensor, input_tensor, group, async_op)
                 else:
-                    # TODO: allreduce ring? (no current allgather ring implementation)
-                    # request = ring_allreduce_mpi(output_tensor, input_tensor, group, async_op)
-                    raise Exception("ring allreduce currently not implemented")
+                    request = ring_allreduce_mpi(output_tensor, input_tensor, group, async_op)
             else:
                 torch.cuda.current_stream().synchronize()
                 if async_op:

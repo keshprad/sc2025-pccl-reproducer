@@ -92,7 +92,7 @@ if __name__ == "__main__":
             kwargs = {}
             if args.library == "mpi":
                 kwargs["directly_call_mpi"] = True
-            kwargs["use_rh"] = True
+            kwargs["use_rh"] = use_rh
             kwargs["use_pccl_cpp_backend"] = args.use_pccl_cpp_backend
 
             time = time_something(function, output_tensor, input_tensor, group=pg, **kwargs)
