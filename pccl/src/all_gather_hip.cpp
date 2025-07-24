@@ -68,3 +68,50 @@ void recursiveDoublingAllGatherGPU(void* output,
     
     CUDA_CHECK(hipEventDestroy(stream_sync_event));
 }
+
+void ringAllGatherGPU(void* output,
+                      const void* input,
+                      int total_elems,
+                      MPI_Comm comm) {
+    int rank, size;
+    MPI_Comm_rank(comm, &rank);
+    MPI_Comm_size(comm, &size);
+    
+    assert(total_elems % size == 0 && "Input tensor size must be divisible by number of processes");
+    int block_size = total_elems / size;
+    // printf("[Rank %d] block_size = %d\n", rank, block_size);
+
+    auto stream = at::hip::getCurrentHIPStreamMasqueradingAsCUDA();
+    hipEvent_t stream_sync_event;
+
+    // Copy local input into its designated block in the output buffer.
+    CUDA_CHECK(hipMemcpyAsync(static_cast<char*>(output) + rank * block_size, 
+                             input, 
+                             block_size, 
+                             hipMemcpyDeviceToDevice, 
+                             stream));
+
+    CUDA_CHECK(hipEventCreateWithFlags(&stream_sync_event, hipEventDisableTiming));
+
+    // P-1 rounds each sending N/P data (where P is num processes, N is total data size)
+    for (int step = 0; step < size - 1; step++) {
+        // Compute block indices
+        int send_idx = (rank - step + size) % size;
+        int recv_idx = (rank - step - 1 + size) % size;
+        int send_peer = (rank + 1) % size;
+        int recv_peer = (rank - 1 + size) % size;
+        
+        // Record an event on the cuda stream.
+        CUDA_CHECK(hipEventRecord(stream_sync_event, stream));
+        // Wait for the copy to complete.
+        CUDA_CHECK(hipEventSynchronize(stream_sync_event));
+        
+        // Send the block to the right neighbor and receive from the left neighbor.
+        MPI_Sendrecv(static_cast<char*>(output) + send_idx * block_size, block_size, MPI_BYTE, send_peer, 0,
+                     static_cast<char*>(output) + recv_idx * block_size, block_size, MPI_BYTE, recv_peer, 0,
+                     comm, MPI_STATUS_IGNORE);
+    }
+
+    // destroy event
+    CUDA_CHECK(hipEventDestroy(stream_sync_event));
+}
