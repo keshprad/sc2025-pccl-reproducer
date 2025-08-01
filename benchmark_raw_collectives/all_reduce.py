@@ -74,11 +74,13 @@ if __name__ == "__main__":
     csv_filename = os.path.join(data_folder,
                                 f"gpus_{gpu_count}_slurm_{slurm_job_id}.csv")
     
-    with open(csv_filename, "w", newline="") as f:
-        writer = csv.writer(f)
-        # Write the header
-        header = ["gpu_count", "slurm_job_id", "output_size", "unit", f"time_{args.library}"]
-        writer.writerow(header)
+    with open(csv_filename, "w") as f:
+        if dist.get_rank() == 0:
+            writer = csv.writer(f)
+            # Write the header
+            header = ["gpu_count", "slurm_job_id", "output_size", "unit", f"time_{args.library}"]
+            writer.writerow(header)
+            f.flush()
 
         for size in sizes:
             if dist.get_rank() == 0:
@@ -116,6 +118,7 @@ if __name__ == "__main__":
             if dist.get_rank() == 0:
                 print("===============================")
                 writer.writerow([gpu_count, slurm_job_id, size, unit, time])
+                f.flush()
         
         if args.test and dist.get_rank() == 0:
             print("All tests passed! PCCL outputs match NCCL outputs")
