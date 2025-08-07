@@ -9,6 +9,7 @@
 #include <vector>
 #include <cstring>
 #include <cassert>
+#include <set>
 
 #define GPUS_PER_NODE 8
 #define NICS_PER_NODE 4
@@ -263,16 +264,26 @@ int main(int argc, char* argv[])
     // Initialize communication context
     OFICommContext comm_ctx(rank, num_ranks, dev, buffer_type, extNet);
     
-    // Data structures to hold connection information
+    // Calculate which peers each rank needs to connect to for recursive doubling
+    std::set<int> needed_peers;
+    for (int step_size = 1; step_size < num_ranks; step_size *= 2) {
+        int partner = rank ^ step_size;
+        if (partner < num_ranks) {
+            needed_peers.insert(partner);
+        }
+    }
+    
+    NCCL_OFI_INFO(NCCL_NET, "Rank %d: Will create connections to %lu peers instead of %d", 
+                  rank, needed_peers.size(), num_ranks - 1);
+    
+    // Data structures to hold connection information - still sized for all ranks for simplicity
     std::vector<std::vector<listenComm_t*>> lComms(num_ranks, std::vector<listenComm_t*>(num_ranks, NULL));
     
-    // Create a vector to hold all handles
+    // Create a vector to hold all handles (keep full size for MPI_Allgather)
     std::vector<char> handles(num_ranks * num_ranks * NCCL_NET_HANDLE_MAXSIZE, 0);
     
-    // Create listening endpoints - one for each potential peer
-    for (int peer = 0; peer < num_ranks; peer++) {
-        if (peer == rank) continue;
-
+    // Create listening endpoints only for ranks that will connect to us
+    for (int peer : needed_peers) {
         char* myHandle = handles.data() + (rank * num_ranks + peer) * NCCL_NET_HANDLE_MAXSIZE;
 
         NCCL_OFI_INFO(NCCL_NET, "Rank %d: Creating listener for rank %d on dev %d", rank, peer, dev);
@@ -283,10 +294,8 @@ int main(int argc, char* argv[])
     MPI_Allgather(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, handles.data(), 
                 num_ranks * NCCL_NET_HANDLE_MAXSIZE, MPI_BYTE, MPI_COMM_WORLD);
     
-    // Every rank connects to every other rank
-    for (int peer = 0; peer < num_ranks; peer++) {
-        if (peer == rank) continue;
-        
+    // Connect only to needed peers
+    for (int peer : needed_peers) {
         // Get handle of peer's listener
         char *peerHandle = handles.data() + (peer * num_ranks + rank) * NCCL_NET_HANDLE_MAXSIZE;
         
@@ -296,17 +305,16 @@ int main(int argc, char* argv[])
         }
     }
     
-    // Accept connections from all other ranks on the appropriate listeners
-    for (int peer = 0; peer < num_ranks; peer++) {
-        if (peer == rank) continue;
-        
+    // Accept connections only from needed peers
+    for (int peer : needed_peers) {
         NCCL_OFI_INFO(NCCL_NET, "Rank %d: Accepting connection from rank %d", rank, peer);
         while (comm_ctx.rComms[rank][peer] == NULL) {
             OFINCCLCHECK(extNet->accept((void *)lComms[rank][peer], (void **)&comm_ctx.rComms[rank][peer]));
         }
     }
 
-    NCCL_OFI_INFO(NCCL_NET, "Rank %d: All connections established", rank);
+    NCCL_OFI_INFO(NCCL_NET, "Rank %d: All connections established (%lu optimized connections)", 
+                  rank, needed_peers.size());
     
     // Calculate the block size
     int block_size = MESSAGE_SIZE;
@@ -370,9 +378,8 @@ int main(int argc, char* argv[])
     OFINCCLCHECK(deallocate_buffer(input_buffer, buffer_type));
     OFINCCLCHECK(deallocate_buffer(output_buffer, buffer_type));
     
-    // Close all connections
-    for (int peer = 0; peer < num_ranks; peer++) {
-        if (peer == rank) continue;
+    // Close all connections - only close the ones we actually created
+    for (int peer : needed_peers) {
         if (comm_ctx.sComms[rank][peer]) {
             OFINCCLCHECK(extNet->closeSend((void *)comm_ctx.sComms[rank][peer]));
         }
