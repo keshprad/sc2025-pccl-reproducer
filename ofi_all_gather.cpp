@@ -3,7 +3,9 @@
  * operations through the NCCL-Net OFI plugin
  */
 
+// utilities from aws-ofi-rccl lib - use -I<path/to/aws-ofi-rccl>/include when compiling
 #include "tests/test-common.h"
+
 #include <vector>
 #include <cstring>
 #include <cassert>

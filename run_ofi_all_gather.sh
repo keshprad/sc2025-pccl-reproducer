@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -p batch
 #SBATCH -A CSC547
-#SBATCH -t 00:05:00
+#SBATCH -t 00:10:00
 
 # Load essential modules
 module load cray-mpich/8.1.31

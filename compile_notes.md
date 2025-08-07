@@ -23,7 +23,7 @@ module load craype-accel-amd-gfx90a
 
 aws-ofi-rccl setup
 ---
-Clone repo:
+Clone aws-ofi-rccl to `./external/aws-ofi-rccl`:
 ```bash
 mkdir external
 cd external
@@ -32,7 +32,7 @@ cd aws-ofi-rccl
 ```
 
 **Small change to let it work with c++ compiler:**  
-in `tests/test-common.h`, change L180 from `return -1;` to `return ncclInvalidArgument;`
+- in `tests/test-common.h`, change L180 from `return -1;` to `return ncclInvalidArgument;`. This is because I'm compiling with cpp instead of c.
 
 Compile aws-ofi-rccl:
 
@@ -52,7 +52,7 @@ ofi_all_gather.cpp
 ---
 Compile:
 ```bash
-hipcc -fpermissive --offload-arch=gfx90a ofi_all_gather.cpp -o ofi_all_gather -Iexternal/aws-ofi-rccl/include -Iexternal/aws-ofi-rccl -I$ROCM_PATH/include -I$MPICH_DIR/include -I/opt/cray/libfabric/1.22.0/include -Lexternal/aws-ofi-rccl/lib -L/opt/cray/libfabric/1.22.0/lib64 -lfabric -L$MPICH_DIR/lib -lmpi ${PE_MPICH_GTL_DIR_amd_gfx90a} ${PE_MPICH_GTL_LIBS_amd_gfx90a}
+hipcc -fpermissive --offload-arch=gfx90a ofi_all_gather.cpp -o ofi_all_gather -Iexternal/aws-ofi-rccl/include -Iexternal/aws-ofi-rccl -I$ROCM_PATH/include -I$MPICH_DIR/include -I/opt/cray/libfabric/1.22.0/include -Lexternal/aws-ofi-rccl/lib -L/opt/cray/libfabric/1.22.0/lib64 -lfabric -L$MPICH_DIR/lib -lmpi ${PE_MPICH_GTL_DIR_amd_gfx90a} ${PE_MPICH_GTL_LIBS_amd_gfx90a} -lrccl
 ```
 Run with: `sbatch -N {nodes} run_ofi_all_gather.sh`
 
