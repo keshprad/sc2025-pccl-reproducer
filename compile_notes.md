@@ -30,7 +30,6 @@ cd external
 git clone https://github.com/ROCm/aws-ofi-rccl
 cd aws-ofi-rccl
 ```
-
 **Small change to let it work with c++ compiler:**  
 - in `tests/test-common.h`, change L180 from `return -1;` to `return ncclInvalidArgument;`. This is because I'm compiling with cpp instead of c.
 
@@ -54,10 +53,26 @@ Compile:
 ```bash
 hipcc -fpermissive --offload-arch=gfx90a ofi_all_gather.cpp -o ofi_all_gather -Iexternal/aws-ofi-rccl/include -Iexternal/aws-ofi-rccl -I$ROCM_PATH/include -I$MPICH_DIR/include -I/opt/cray/libfabric/1.22.0/include -Lexternal/aws-ofi-rccl/lib -L/opt/cray/libfabric/1.22.0/lib64 -lfabric -L$MPICH_DIR/lib -lmpi ${PE_MPICH_GTL_DIR_amd_gfx90a} ${PE_MPICH_GTL_LIBS_amd_gfx90a} -lrccl
 ```
-Run with: `sbatch -N {nodes} run_ofi_all_gather.sh`
+Run with: `sbatch -N {nodes} -n {gpus} run_ofi_all_gather.sh`
 
 ofi_p2p.cpp
 ---
 ```bash
 hipcc -fpermissive --offload-arch=gfx90a ofi_p2p.cpp -o ofi_p2p -Iexternal/aws-ofi-rccl/include -Iexternal/aws-ofi-rccl -I$ROCM_PATH/include -I$MPICH_DIR/include -I/opt/cray/libfabric/1.22.0/include -Lexternal/aws-ofi-rccl/lib -L/opt/cray/libfabric/1.22.0/lib64 -lfabric -L$MPICH_DIR/lib -lmpi ${PE_MPICH_GTL_DIR_amd_gfx90a} ${PE_MPICH_GTL_LIBS_amd_gfx90a}
 ```
+
+ofi_all_gather_new.cpp
+---
+Compile:
+```bash
+hipcc -fpermissive --offload-arch=gfx90a ofi_all_gather_new.cpp -o ofi_all_gather_new -Iexternal/aws-ofi-rccl/include -Iexternal/aws-ofi-rccl -I$ROCM_PATH/include -I$MPICH_DIR/include -I/opt/cray/libfabric/1.22.0/include -Lexternal/aws-ofi-rccl/lib -L/opt/cray/libfabric/1.22.0/lib64 -lfabric -L$MPICH_DIR/lib -lmpi ${PE_MPICH_GTL_DIR_amd_gfx90a} ${PE_MPICH_GTL_LIBS_amd_gfx90a}
+```
+Run with: `sbatch -N {nodes} -n {gpus} run_ofi_all_gather.sh`
+
+ofi_all_gather_old.cpp
+---
+Compile:
+```bash
+hipcc -fpermissive --offload-arch=gfx90a ofi_all_gather_old.cpp -o ofi_all_gather_old -Iexternal/aws-ofi-rccl/include -Iexternal/aws-ofi-rccl -I$ROCM_PATH/include -I$MPICH_DIR/include -I/opt/cray/libfabric/1.22.0/include -Lexternal/aws-ofi-rccl/lib -L/opt/cray/libfabric/1.22.0/lib64 -lfabric -L$MPICH_DIR/lib -lmpi ${PE_MPICH_GTL_DIR_amd_gfx90a} ${PE_MPICH_GTL_LIBS_amd_gfx90a}
+```
+Run with: `sbatch -N {nodes} -n {gpus} run_ofi_all_gather.sh`

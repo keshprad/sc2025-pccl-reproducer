@@ -15,6 +15,164 @@
 #define MESSAGE_SIZE 1024 * 1024  // 1 MB message size
 #define TAG 1
 
+// Structure to hold communication setup data
+struct OFICommContext {
+    ncclNet_t *extNet;
+    int rank;
+    int num_ranks;
+    int dev;
+    int buffer_type;
+    std::vector<std::vector<sendComm_t*>> sComms;
+    std::vector<std::vector<recvComm_t*>> rComms;
+    
+    OFICommContext(int r, int nr, int d, int bt, ncclNet_t *net) 
+        : rank(r), num_ranks(nr), dev(d), buffer_type(bt), extNet(net),
+          sComms(nr, std::vector<sendComm_t*>(nr, NULL)),
+          rComms(nr, std::vector<recvComm_t*>(nr, NULL)) {}
+};
+
+// All-gather function using recursive doubling algorithm
+int all_gather(void* input_buffer, void* output_buffer, int block_size, OFICommContext& ctx) {
+    int rank = ctx.rank;
+    int num_ranks = ctx.num_ranks;
+    int buffer_type = ctx.buffer_type;
+    ncclNet_t *extNet = ctx.extNet;
+    
+    // Copy local data to the output buffer at position corresponding to rank
+    if (buffer_type == NCCL_PTR_HOST) {
+        memcpy((char*)output_buffer + (rank * block_size), input_buffer, block_size);
+    } else {
+        CUDACHECK(hipMemcpy((char*)output_buffer + (rank * block_size), input_buffer, block_size, hipMemcpyDeviceToDevice));
+    }
+    
+    MPI_Barrier(MPI_COMM_WORLD);  // Make sure all ranks are ready
+    
+    // Implement recursive doubling
+    int seg_size = 1;  // Start with segments of size 1 (in terms of blocks)
+    
+    while (seg_size < num_ranks) {
+        int partner = rank ^ seg_size;
+        int group_start = (rank / (2 * seg_size)) * (2 * seg_size);
+        int send_offset, recv_offset;
+        
+        if (partner >= num_ranks) {  // Make sure partner is valid
+            return -1;
+        }
+        // For now, assume power of 2 ranks, so all partners are valid
+
+        if (rank < partner) {
+            send_offset = group_start * block_size;
+            recv_offset = (group_start + seg_size) * block_size;
+        } else {
+            send_offset = (group_start + seg_size) * block_size;
+            recv_offset = group_start * block_size;
+        }
+        
+        int count = seg_size * block_size;
+        
+        // Register memory for the send and receive operations
+        void *send_handle = NULL;
+        void *recv_handle = NULL;
+        OFINCCLCHECK(extNet->regMr((void *)ctx.sComms[rank][partner], 
+                    (void *)((char*)output_buffer + send_offset), 
+                    count, buffer_type, &send_handle));
+        OFINCCLCHECK(extNet->regMr((void *)ctx.rComms[rank][partner], 
+                    (void *)((char*)output_buffer + recv_offset), 
+                    count, buffer_type, &recv_handle));
+        
+        // Send and receive data
+        nccl_ofi_req_t *send_req = NULL;
+        nccl_ofi_req_t *recv_req = NULL;
+        
+#if (NCCL_VERSION_CODE >= NCCL_VERSION(2, 12, 0))
+        // For NCCL v2.12 and later
+        
+        // For grouped recvs
+        // Use group of 1 here since each step of recursive allgather has ranks send/recv 1 msg each
+        int nrecv = 1, tag = 1;
+        int counts[1] = {count};
+        int tags[1] = {tag};
+        void *recv_ptr = (char*)output_buffer + recv_offset;
+        void **recv_buffs = &recv_ptr;
+
+        while (send_req == NULL) {
+            OFINCCLCHECK(extNet->isend((void *)ctx.sComms[rank][partner], 
+                        (void *)((char*)output_buffer + send_offset), 
+                        count, tag, send_handle, (void **)&send_req));
+        }
+
+        while (recv_req == NULL) {
+            OFINCCLCHECK(extNet->irecv((void *)ctx.rComms[rank][partner], 
+                        nrecv, 
+                        recv_buffs,
+                        counts, tags, &recv_handle, (void **)&recv_req));
+        }
+#else
+        // For earlier NCCL versions
+        while (send_req == NULL) {
+            OFINCCLCHECK(extNet->isend((void *)ctx.sComms[rank][partner], 
+                        (void *)((char*)output_buffer + send_offset), 
+                        count, send_handle, (void **)&send_req));
+        }
+        
+        while (recv_req == NULL) {
+            OFINCCLCHECK(extNet->irecv((void *)ctx.rComms[rank][partner], 
+                        (void *)((char*)output_buffer + recv_offset),
+                        count, recv_handle, (void **)&recv_req));
+        }
+#endif
+        
+        // Wait for completion
+        int done_send = 0, done_recv = 0;
+        int received_size;
+        
+        while (!done_send || !done_recv) {
+            if (!done_send) {
+                OFINCCLCHECK(extNet->test((void *)send_req, &done_send, NULL));
+            }
+            if (!done_recv) {
+                OFINCCLCHECK(extNet->test((void *)recv_req, &done_recv, &received_size));
+            }
+        }
+        
+        // For CUDA buffers, we might need to flush
+        if (buffer_type == NCCL_PTR_CUDA) {
+#if (NCCL_VERSION_CODE >= NCCL_VERSION(2, 8, 0))
+            nccl_ofi_req_t *flush_req = NULL;
+#if (NCCL_VERSION_CODE >= NCCL_VERSION(2, 12, 0))
+            OFINCCLCHECK(extNet->iflush((void *)ctx.rComms[rank][partner], 
+                        nrecv,
+                        (void **)((char*)output_buffer + recv_offset),
+                        counts, &recv_handle, (void **)&flush_req));
+#else
+            OFINCCLCHECK(extNet->iflush((void *)ctx.rComms[rank][partner],
+                        (void *)((char*)output_buffer + recv_offset),
+                        count, recv_handle, (void **)&flush_req));
+#endif
+            done_recv = 0;
+            while (!done_recv && flush_req) {
+                OFINCCLCHECK(extNet->test((void *)flush_req, &done_recv, NULL));
+            }
+#else
+            OFINCCLCHECK(extNet->flush((void *)ctx.rComms[rank][partner],
+                        (void *)((char*)output_buffer + recv_offset),
+                        count, recv_handle));
+#endif
+        }
+        
+        // Deregister memory
+        OFINCCLCHECK(extNet->deregMr((void *)ctx.sComms[rank][partner], send_handle));
+        OFINCCLCHECK(extNet->deregMr((void *)ctx.rComms[rank][partner], recv_handle));
+        
+        seg_size *= 2;  // Double segment size for next iteration
+        
+        // Wait for all ranks to complete this phase
+        MPI_Barrier(MPI_COMM_WORLD);
+    }
+    
+    return 0;
+}
+
 int main(int argc, char* argv[])
 {
     int rank, proc_name_len, num_ranks, local_rank = 0;
@@ -102,10 +260,11 @@ int main(int argc, char* argv[])
         buffer_type = NCCL_PTR_CUDA;
     }
 
+    // Initialize communication context
+    OFICommContext comm_ctx(rank, num_ranks, dev, buffer_type, extNet);
+    
     // Data structures to hold connection information
     std::vector<std::vector<listenComm_t*>> lComms(num_ranks, std::vector<listenComm_t*>(num_ranks, NULL));
-    std::vector<std::vector<sendComm_t*>> sComms(num_ranks, std::vector<sendComm_t*>(num_ranks, NULL));
-    std::vector<std::vector<recvComm_t*>> rComms(num_ranks, std::vector<recvComm_t*>(num_ranks, NULL));
     
     // Create a vector to hold all handles
     std::vector<char> handles(num_ranks * num_ranks * NCCL_NET_HANDLE_MAXSIZE, 0);
@@ -132,8 +291,8 @@ int main(int argc, char* argv[])
         char *peerHandle = handles.data() + (peer * num_ranks + rank) * NCCL_NET_HANDLE_MAXSIZE;
         
         NCCL_OFI_INFO(NCCL_NET, "Rank %d: Connecting to rank %d", rank, peer);
-        while (sComms[rank][peer] == NULL) {
-            OFINCCLCHECK(extNet->connect(dev, (void *)peerHandle, (void **)&sComms[rank][peer]));
+        while (comm_ctx.sComms[rank][peer] == NULL) {
+            OFINCCLCHECK(extNet->connect(dev, (void *)peerHandle, (void **)&comm_ctx.sComms[rank][peer]));
         }
     }
     
@@ -142,20 +301,18 @@ int main(int argc, char* argv[])
         if (peer == rank) continue;
         
         NCCL_OFI_INFO(NCCL_NET, "Rank %d: Accepting connection from rank %d", rank, peer);
-        while (rComms[rank][peer] == NULL) {
-            OFINCCLCHECK(extNet->accept((void *)lComms[rank][peer], (void **)&rComms[rank][peer]));
+        while (comm_ctx.rComms[rank][peer] == NULL) {
+            OFINCCLCHECK(extNet->accept((void *)lComms[rank][peer], (void **)&comm_ctx.rComms[rank][peer]));
         }
     }
 
     NCCL_OFI_INFO(NCCL_NET, "Rank %d: All connections established", rank);
     
-    // Now implement the recursive doubling all-gather algorithm
-    
     // Calculate the block size
     int block_size = MESSAGE_SIZE;
     int total_elems = block_size * num_ranks;
     
-    // Allocate memory for input data (local data), output buffer (result of all-gather)
+    // Allocate ROCm/HIP memory for input data (local data), output buffer (result of all-gather)
     char *input_buffer = NULL;
     char *output_buffer = NULL;
     
@@ -165,145 +322,19 @@ int main(int argc, char* argv[])
     // Initialize input buffer with rank-specific data for validation
     for (int i = 0; i < block_size; i++) {
         if (buffer_type == NCCL_PTR_HOST) {
-            input_buffer[i] = (char)(rank + 1);  // Fill with rank+'A' for easy verification
+            input_buffer[i] = (char)(rank + 1);  // Fill with rank+1 for easy verification
         } else {
-            // For CUDA buffers, we need to use cudaMemcpy
+            // For ROCm/CUDA buffers, we need to use hipMemcpy
             char value = (char)(rank + 1);
             CUDACHECK(hipMemcpy(input_buffer + i, &value, sizeof(char), hipMemcpyHostToDevice));
         }
     }
     
-    // Copy local data to the output buffer at position corresponding to rank
-    if (buffer_type == NCCL_PTR_HOST) {
-        memcpy(output_buffer + (rank * block_size), input_buffer, block_size);
-    } else {
-        CUDACHECK(hipMemcpy(output_buffer + (rank * block_size), input_buffer, block_size, hipMemcpyDeviceToDevice));
-    }
-    
-
-    MPI_Barrier(MPI_COMM_WORLD);  // Make sure all ranks are ready
-    
-    // Implement recursive doubling
-    int seg_size = 1;  // Start with segments of size 1 (in terms of blocks)
-    
-    while (seg_size < num_ranks) {
-        int partner = rank ^ seg_size;
-        int group_start = (rank / (2 * seg_size)) * (2 * seg_size);
-        int send_offset, recv_offset;
-        
-        if (partner >= num_ranks) {  // Make sure partner is valid
-            return -1;
-        }
-        // For now, assume power of 2 ranks, so all partners are valid
-
-        if (rank < partner) {
-            send_offset = group_start * block_size;
-            recv_offset = (group_start + seg_size) * block_size;
-        } else {
-            send_offset = (group_start + seg_size) * block_size;
-            recv_offset = group_start * block_size;
-        }
-        
-        int count = seg_size * block_size;
-        
-        // Register memory for the send and receive operations
-        void *send_handle = NULL;
-        void *recv_handle = NULL;
-        OFINCCLCHECK(extNet->regMr((void *)sComms[rank][partner], 
-                    (void *)(output_buffer + send_offset), 
-                    count, buffer_type, &send_handle));
-        OFINCCLCHECK(extNet->regMr((void *)rComms[rank][partner], 
-                    (void *)(output_buffer + recv_offset), 
-                    count, buffer_type, &recv_handle));
-        
-        // Send and receive data
-        nccl_ofi_req_t *send_req = NULL;
-        nccl_ofi_req_t *recv_req = NULL;
-        
-#if (NCCL_VERSION_CODE >= NCCL_VERSION(2, 12, 0))
-        // For NCCL v2.12 and later
-        
-        // For grouped recvs
-        // Use group of 1 here since each step of recursive allgather has ranks send/recv 1 msg each
-        int nrecv = 1, tag = 1;
-        int counts[1] = {count};
-        int tags[1] = {tag};
-        void *recv_ptr = output_buffer + recv_offset;
-        void **recv_buffs = &recv_ptr;
-
-        while (send_req == NULL) {
-            OFINCCLCHECK(extNet->isend((void *)sComms[rank][partner], 
-                        (void *)(output_buffer + send_offset), 
-                        count, tag, send_handle, (void **)&send_req));
-        }
-
-        while (recv_req == NULL) {
-            OFINCCLCHECK(extNet->irecv((void *)rComms[rank][partner], 
-                        nrecv, 
-                        recv_buffs,
-                        counts, tags, &recv_handle, (void **)&recv_req));
-        }
-#else
-        // For earlier NCCL versions
-        while (send_req == NULL) {
-            OFINCCLCHECK(extNet->isend((void *)sComms[rank][partner], 
-                        (void *)(output_buffer + send_offset), 
-                        count, send_handle, (void **)&send_req));
-        }
-        
-        while (recv_req == NULL) {
-            OFINCCLCHECK(extNet->irecv((void *)rComms[rank][partner], 
-                        (void *)(output_buffer + recv_offset),
-                        count, recv_handle, (void **)&recv_req));
-        }
-#endif
-        
-        // Wait for completion
-        int done_send = 0, done_recv = 0;
-        int received_size;
-        
-        while (!done_send || !done_recv) {
-            if (!done_send) {
-                OFINCCLCHECK(extNet->test((void *)send_req, &done_send, NULL));
-            }
-            if (!done_recv) {
-                OFINCCLCHECK(extNet->test((void *)recv_req, &done_recv, &received_size));
-            }
-        }
-        
-        // For CUDA buffers, we might need to flush
-        if (buffer_type == NCCL_PTR_CUDA) {
-#if (NCCL_VERSION_CODE >= NCCL_VERSION(2, 8, 0))
-            nccl_ofi_req_t *flush_req = NULL;
-#if (NCCL_VERSION_CODE >= NCCL_VERSION(2, 12, 0))
-            OFINCCLCHECK(extNet->iflush((void *)rComms[rank][partner], 
-                        nrecv,
-                        (void **)(output_buffer + recv_offset),
-                        counts, &recv_handle, (void **)&flush_req));
-#else
-            OFINCCLCHECK(extNet->iflush((void *)rComms[rank][partner],
-                        (void *)(output_buffer + recv_offset),
-                        count, recv_handle, (void **)&flush_req));
-#endif
-            done_recv = 0;
-            while (!done_recv && flush_req) {
-                OFINCCLCHECK(extNet->test((void *)flush_req, &done_recv, NULL));
-            }
-#else
-            OFINCCLCHECK(extNet->flush((void *)rComms[rank][partner],
-                        (void *)(output_buffer + recv_offset),
-                        count, recv_handle));
-#endif
-        }
-        
-        // Deregister memory
-        OFINCCLCHECK(extNet->deregMr((void *)sComms[rank][partner], send_handle));
-        OFINCCLCHECK(extNet->deregMr((void *)rComms[rank][partner], recv_handle));
-        
-        seg_size *= 2;  // Double segment size for next iteration
-        
-        // Wait for all ranks to complete this phase
-        MPI_Barrier(MPI_COMM_WORLD);
+    // Call the all_gather function
+    int result = all_gather(input_buffer, output_buffer, block_size, comm_ctx);
+    if (result != 0) {
+        NCCL_OFI_WARN("Rank %d: All-gather operation failed", rank);
+        return result;
     }
     
     // Validate the result - each process should now have all data
@@ -342,11 +373,11 @@ int main(int argc, char* argv[])
     // Close all connections
     for (int peer = 0; peer < num_ranks; peer++) {
         if (peer == rank) continue;
-        if (sComms[rank][peer]) {
-            OFINCCLCHECK(extNet->closeSend((void *)sComms[rank][peer]));
+        if (comm_ctx.sComms[rank][peer]) {
+            OFINCCLCHECK(extNet->closeSend((void *)comm_ctx.sComms[rank][peer]));
         }
-        if (rComms[rank][peer]) {
-            OFINCCLCHECK(extNet->closeRecv((void *)rComms[rank][peer]));
+        if (comm_ctx.rComms[rank][peer]) {
+            OFINCCLCHECK(extNet->closeRecv((void *)comm_ctx.rComms[rank][peer]));
         }
         if (lComms[rank][peer]) {
             OFINCCLCHECK(extNet->closeListen(static_cast<void*>(lComms[rank][peer])));
