@@ -1,3 +1,5 @@
+# This file is a duplicate of https://github.com/karpathy/nanoGPT/blob/dccf362c2b2d81eafebc981ccde5b4a2780c25bc/data/openwebtext/prepare.py
+
 # saves the openwebtext dataset to a binary file for training. following was helpful:
 # https://github.com/HazyResearch/flash-attention/blob/main/training/src/datamodules/language_modeling_hf.py
 
@@ -58,7 +60,7 @@ if __name__ == '__main__':
     # concatenate all the ids in each dataset into one large file we can use for training
     for split, dset in tokenized.items():
         arr_len = np.sum(dset['len'], dtype=np.uint64)
-        filename = os.path.join(os.path.dirname(__file__), f'{split}.bin')
+        filename = os.path.join(os.getenv("HF_HOME"), 'datasets', 'openwebtext', f'{split}.bin')
         dtype = np.uint16 # (can do since enc.max_token_value == 50256 is < 2**16)
         arr = np.memmap(filename, dtype=dtype, mode='w+', shape=(arr_len,))
         total_batches = 1024
