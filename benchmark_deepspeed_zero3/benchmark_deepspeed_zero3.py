@@ -38,7 +38,8 @@ logger = logging.getLogger(__name__)
 class ExperimentConfig:
     """Configuration for the DeepSpeed ZeRO-3 experiment"""
     model_size: str  # "7B" or "13B"
-    target_tokens: int = 4_000_000  # Target 4 million tokens (will be adjusted)
+    # target_tokens: int = 4_000_000  # Target 4 million tokens (will be adjusted)
+    target_tokens: int = 100_000  # Target 4 million tokens (will be adjusted)
     seq_len: int = 2048
     num_batches: int = 10
     warmup_batches: int = 2  # Skip first 2 batches for averaging
@@ -188,15 +189,15 @@ def create_deepspeed_config(experiment_config: ExperimentConfig, offload_params:
         "zero_optimization": {
             "stage": 3,
             # Try without optimizer offloading first
-            # "offload_optimizer": {
-            #     "device": "cpu", 
-            #     "pin_memory": True
-            # },
+            "offload_optimizer": {
+                "device": "cpu", 
+                "pin_memory": True
+            },
             # Try without parameter offloading first
-            # "offload_param": {
-            #     "device": "cpu",
-            #     "pin_memory": True
-            # },
+            "offload_param": {
+                "device": "cpu",
+                "pin_memory": True
+            },
             "overlap_comm": True,
             "contiguous_gradients": True,
             "sub_group_size": 1e9,

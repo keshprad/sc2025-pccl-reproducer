@@ -6,12 +6,8 @@
 #SBATCH --ntasks-per-node=8
 #SBATCH --gpus-per-node=8
 
-# NOTE: IF ADDING ANY ENV VARIABLES HERE, ADD CORRESPONDING LINE TO setup_deepspeed_env.sh
-
 # DeepSpeed ZeRO-3 Benchmark Runner
-# Usage for single node: sbatch --export=MODEL_SIZE=7B run_deepspeed_benchmark.sh
-# Usage for multi-node:  sbatch -N 2 --export=MODEL_SIZE=7B run_deepspeed_benchmark.sh
-#                        sbatch -N 4 --export=MODEL_SIZE=13B run_deepspeed_benchmark.sh
+# NOTE: IF ADDING ANY ENV VARIABLES HERE, ADD CORRESPONDING LINE TO setup_deepspeed_env.sh
 
 PROJ_NAME="csc547"
 export WRKSPC=/lustre/orion/$PROJ_NAME/scratch/$USER
@@ -25,36 +21,15 @@ module load craype-accel-amd-gfx90a
 module load cray-python/3.10.10
 module load craype-accel-amd-gfx90a
 module load ninja
+module load PrgEnv-gnu/8.6.0
 module list
 
-# Load Cray OpenMP runtime libraries to fix CPU Adam extension
-# export OMP_NUM_THREADS=8
-# export CRAY_OMP_CHECK_AFFINITY=TRUE
-
-# # Fix for CCE OpenMP fatal error: prevent PyTorch from changing thread settings
-# export MKL_NUM_THREADS=8
-# export OPENBLAS_NUM_THREADS=8
-# export VECLIB_MAXIMUM_THREADS=8
-# export NUMEXPR_NUM_THREADS=8
-# # Tell PyTorch not to modify OpenMP thread settings at runtime
-# export TORCH_SET_NUM_THREADS=8
-# export KMP_DUPLICATE_LIB_OK=TRUE
-
 # Add Cray compiler runtime libraries to LD_LIBRARY_PATH
-# if [ -d "/opt/cray/pe/cce/18.0.1/cce/x86_64/lib" ]; then
-#     export LD_LIBRARY_PATH="/opt/cray/pe/cce/18.0.1/cce/x86_64/lib:${LD_LIBRARY_PATH}"
-#     echo "Added Cray CCE runtime library path"
-# fi
-# # Preload Cray OpenMP runtime if available
-# CRAY_OMP_LIB="/opt/cray/pe/cce/18.0.1/cce/x86_64/lib/libcraymp.so"
-# if [ -f "$CRAY_OMP_LIB" ]; then
-#     export LD_PRELOAD="$CRAY_OMP_LIB:$LD_PRELOAD"
-#     echo "Preloading Cray OpenMP library: $CRAY_OMP_LIB"
-# fi
+export LD_LIBRARY_PATH="${CRAY_LD_LIBRARY_PATH}:${LD_LIBRARY_PATH}"
 
 # Set proper compiler for CPU extensions (needs GCC 9+ compatibility)
+export CC=hipcc
 export CXX=CC
-export CC=cc
 export CPP=cpp
 
 source $WRKSPC/$VENV_NAME/bin/activate
@@ -78,9 +53,6 @@ export NCCL_CROSS_NIC=1
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 export NCCL_NET_GDR_LEVEL="PHB"
 # Additional NCCL settings for multi-node
-export NCCL_IB_DISABLE=0
-# export NCCL_DEBUG=INFO
-export NCCL_TREE_THRESHOLD=0
 ## RCCL plugin
 export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$WRKSPC/aws-ofi-rccl/lib"
 
@@ -112,7 +84,6 @@ MASK_5="0x000000000000fe00" # Cores 9-15
 MASK_6="0x000000fe00000000" # Cores 33-39
 MASK_7="0x0000fe0000000000" # Cores 41-47
 CPU_MASK="--cpu-bind=mask_cpu:${MASK_0},${MASK_1},${MASK_2},${MASK_3},${MASK_4},${MASK_5},${MASK_6},${MASK_7}"
-export DEEPSPEED_SLURM_EXTRA_ARGS="-N $NNODES -n $GPUS --ntasks-per-node=8 --gpus-per-task=1 -c 7 ${CPU_MASK} --mem-bind=map_mem:3,3,1,1,0,0,2,2"
 
 MODEL_SIZE="1B"
 # Create output directory
@@ -137,7 +108,7 @@ fi
 # Create .deepspeed_env for multi-node training
 if [ $NNODES -gt 1 ]; then
     export DS_ENV_FILE=benchmark_deepspeed_zero3/.deepspeed_env
-    source benchmark_deepspeed_zero3/setup_deepspeed_env.sh
+    source scripts/frontier/setup_deepspeed_env.sh
 fi
 
 echo "Starting DeepSpeed ZeRO-3 Benchmark"
