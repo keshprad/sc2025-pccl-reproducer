@@ -127,7 +127,18 @@ def all_reduce_2D(output_tensor: torch.Tensor,
                                       dtype=input_tensor.dtype)
 
     # Step-1 2-dim reduce-scatter
-    reduce_scatter_2D(output_intermediate, input_tensor, group, async_op, use_rh_and_rd, use_pccl_cpp_backend)
+    reduce_scatter_2D(output_tensor=output_intermediate, 
+                      input_tensor=input_tensor, 
+                      group=group, 
+                      async_op=async_op, 
+                      use_rh=use_rh_and_rd, 
+                      use_pccl_cpp_backend=use_pccl_cpp_backend)
 
     # Step-2 2-dim all-gather
-    all_gather_2D(output_tensor, output_intermediate, group, async_op, use_rh_and_rd, use_pccl_cpp_backend)
+    all_gather_2D(output_tensor=output_tensor, 
+                  input_tensor=output_intermediate, 
+                  group=group, 
+                  async_op=async_op,
+                  # directly_call_mpi= TODO: standardize API for all_gather_2D, reduce_scatter_2D, all_gather_2D
+                  use_rd=use_rh_and_rd, 
+                  use_pccl_cpp_backend=use_pccl_cpp_backend)
