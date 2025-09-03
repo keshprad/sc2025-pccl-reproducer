@@ -51,7 +51,7 @@ if __name__ == "__main__":
             build_pccl()
     
     gpu_count, slurm_job_id = get_gpu_counts_and_job_id()
-    sizes = np.array([1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024])
+    sizes = np.array([1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096])
     unit = "MB"
     use_rd = args.pccl_recursive_alg 
     if args.library == "pccl":
@@ -109,11 +109,13 @@ if __name__ == "__main__":
             # gold
             if args.test:
                 output_tensor_gold = torch.empty((output_buffer_numel,), dtype=dtype, device=device)
-                _all_reduce(output_tensor_gold, input_tensor)
+                nccl_time = time_something(_all_reduce, output_tensor_gold, input_tensor)
                 assert allclose(output_tensor, output_tensor_gold)
             
             if dist.get_rank() == 0:
                 print(f"time_{args.library} = {time:.2f} ms")
+                if args.test:
+                    print(f"time_nccl = {nccl_time:.2f} ms")
             
             if dist.get_rank() == 0:
                 print("===============================")

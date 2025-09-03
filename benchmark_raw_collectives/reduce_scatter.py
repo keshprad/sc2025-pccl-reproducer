@@ -75,9 +75,10 @@ if __name__ == "__main__":
                                 f"gpus_{gpu_count}_slurm_{slurm_job_id}.csv")
     
     with open(csv_filename, "w", newline="") as f:
-        writer = csv.writer(f)
-        header = ["gpu_count", "slurm_job_id", "output_size", "unit", f"time_{args.library}"]
-        writer.writerow(header)
+        if dist.get_rank() == 0:
+            writer = csv.writer(f)
+            header = ["gpu_count", "slurm_job_id", "output_size", "unit", f"time_{args.library}"]
+            writer.writerow(header)
 
         for size in sizes:
             if dist.get_rank() == 0:
