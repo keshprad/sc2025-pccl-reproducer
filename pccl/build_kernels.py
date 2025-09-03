@@ -71,7 +71,7 @@ def build():
 
     
     if torch.version.hip is not None:
-        extra_include_paths=["/opt/rocm-6.2.4/include"]
+        extra_include_paths=[f"{os.getenv('ROCM_PATH')}/include"]
     else:
         extra_include_paths=[]
 
@@ -87,7 +87,7 @@ def build():
                             '-x hip',
                             ]
          extra_link_flags = ['-lamdhip64', 
-                             '-L/opt/rocm-6.2.4/lib']
+                             f'-L{os.getenv("ROCM_PATH")}/lib']
          extra_c_flags = []
     else:
          extra_cuda_flags = ['-U__CUDA_NO_HALF_OPERATORS__',
