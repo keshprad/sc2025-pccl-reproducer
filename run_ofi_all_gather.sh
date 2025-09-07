@@ -4,8 +4,8 @@
 #SBATCH -t 00:10:00
 
 # Load essential modules
-module load cray-mpich/8.1.31
-module load rocm/6.2.4
+module load cray-mpich/8.1.32
+module load rocm/6.4.1
 module load cpe/25.03
 module load craype-accel-amd-gfx90a
 module list
@@ -53,7 +53,7 @@ MASK_6="0x000000fe00000000" # Cores 33-39
 MASK_7="0x0000fe0000000000" # Cores 41-47
 CPU_MASK="--cpu-bind=mask_cpu:${MASK_0},${MASK_1},${MASK_2},${MASK_3},${MASK_4},${MASK_5},${MASK_6},${MASK_7}"
 
-SCRIPT="./ofi_all_gather"
+SCRIPT="./ofi_build/ofi_all_gather"
 
 run_cmd="srun -N $NNODES -n $GPUS --ntasks-per-node=8 -c 7 ${CPU_MASK} --mem-bind=map_mem:3,3,1,1,0,0,2,2  bash -c 'ulimit -c 0; exec $SCRIPT'"
 echo $run_cmd
