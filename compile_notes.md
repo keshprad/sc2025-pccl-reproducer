@@ -15,8 +15,8 @@ sc2025-pccl-reproducer
 Load modules
 ---
 ```bash
-module load cray-mpich/8.1.31
-module load rocm/6.2.4
+module load cray-mpich/8.1.32
+module load rocm/6.4.1
 module load cpe/25.03
 module load craype-accel-amd-gfx90a
 ```
@@ -38,7 +38,7 @@ Compile aws-ofi-rccl:
 ```bash
 ./autogen.sh
 libfabric_path=/opt/cray/libfabric/1.22.0
-rocm_version=6.2.4
+rocm_version=6.4.1
 export LD_LIBRARY_PATH=/opt/rocm-$rocm_version/lib:$LD_LIBRARY_PATH
 CC=hipcc CFLAGS=-I/opt/rocm-$rocm_version/include ./configure \
 --with-libfabric=$libfabric_path --with-rccl=/opt/rocm-$rocm_version --enable-trace \
@@ -49,30 +49,14 @@ make install
 
 ofi_all_gather.cpp
 ---
-Compile:
-```bash
-hipcc -fpermissive --offload-arch=gfx90a ofi_all_gather.cpp -o ofi_all_gather -Iexternal/aws-ofi-rccl/include -Iexternal/aws-ofi-rccl -I$ROCM_PATH/include -I$MPICH_DIR/include -I/opt/cray/libfabric/1.22.0/include -Lexternal/aws-ofi-rccl/lib -L/opt/cray/libfabric/1.22.0/lib64 -lfabric -L$MPICH_DIR/lib -lmpi ${PE_MPICH_GTL_DIR_amd_gfx90a} ${PE_MPICH_GTL_LIBS_amd_gfx90a} -lrccl
-```
-Run with: `sbatch -N {nodes} -n {gpus} run_ofi_all_gather.sh`
+- Use `make all` to compile
+- Run with: `sbatch -N {nodes} -n {gpus} run_ofi_all_gather.sh`
 
-ofi_p2p.cpp
+
+<!-- ofi_p2p.cpp
 ---
 ```bash
 hipcc -fpermissive --offload-arch=gfx90a ofi_p2p.cpp -o ofi_p2p -Iexternal/aws-ofi-rccl/include -Iexternal/aws-ofi-rccl -I$ROCM_PATH/include -I$MPICH_DIR/include -I/opt/cray/libfabric/1.22.0/include -Lexternal/aws-ofi-rccl/lib -L/opt/cray/libfabric/1.22.0/lib64 -lfabric -L$MPICH_DIR/lib -lmpi ${PE_MPICH_GTL_DIR_amd_gfx90a} ${PE_MPICH_GTL_LIBS_amd_gfx90a}
 ```
 
-ofi_all_gather_new.cpp
----
-Compile:
-```bash
-hipcc -fpermissive --offload-arch=gfx90a ofi_all_gather_new.cpp -o ofi_all_gather_new -Iexternal/aws-ofi-rccl/include -Iexternal/aws-ofi-rccl -I$ROCM_PATH/include -I$MPICH_DIR/include -I/opt/cray/libfabric/1.22.0/include -Lexternal/aws-ofi-rccl/lib -L/opt/cray/libfabric/1.22.0/lib64 -lfabric -L$MPICH_DIR/lib -lmpi ${PE_MPICH_GTL_DIR_amd_gfx90a} ${PE_MPICH_GTL_LIBS_amd_gfx90a}
-```
-Run with: `sbatch -N {nodes} -n {gpus} run_ofi_all_gather.sh`
-
-ofi_all_gather_old.cpp
----
-Compile:
-```bash
-hipcc -fpermissive --offload-arch=gfx90a ofi_all_gather_old.cpp -o ofi_all_gather_old -Iexternal/aws-ofi-rccl/include -Iexternal/aws-ofi-rccl -I$ROCM_PATH/include -I$MPICH_DIR/include -I/opt/cray/libfabric/1.22.0/include -Lexternal/aws-ofi-rccl/lib -L/opt/cray/libfabric/1.22.0/lib64 -lfabric -L$MPICH_DIR/lib -lmpi ${PE_MPICH_GTL_DIR_amd_gfx90a} ${PE_MPICH_GTL_LIBS_amd_gfx90a}
-```
-Run with: `sbatch -N {nodes} -n {gpus} run_ofi_all_gather.sh`
+Run with: `sbatch -N {nodes} -n {gpus} run_ofi_all_gather.sh` -->
