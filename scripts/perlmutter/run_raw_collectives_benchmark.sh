@@ -9,9 +9,9 @@
 
 
 module load nccl
-module load cudatoolkit/12.4
 source $SCRATCH/pccl-venv/bin/activate
-module load PrgEnv-gnu cray-mpich craype-accel-nvidia80
+module load cudatoolkit/12.9
+module load PrgEnv-gnu/8.5.0 cray-mpich/8.1.30 craype-accel-nvidia80
 
 ## calculating the number of nodes and GPUs
 export NNODES=$SLURM_JOB_NUM_NODES
@@ -51,9 +51,10 @@ export MPICH_GPU_ALLREDUCE_USE_KERNEL=1
 # collecting counter data
 #export MPICH_OFI_CXI_COUNTER_REPORT=5
 
-SCRIPT="python -u benchmark_raw_collectives/all_gather.py \
+SCRIPT="python -u benchmark_raw_collectives/all_reduce.py \
         --num-gpus-per-node $GPUS_PER_NODE \
         --machine perlmutter \
+        --dtype fp32 \
         --library pccl --test"
 
 

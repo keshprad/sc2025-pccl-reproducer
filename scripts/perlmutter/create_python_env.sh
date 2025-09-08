@@ -12,7 +12,8 @@ ENV_NAME="pccl-venv"
 
 cd $WRKSPC
 echo -e "${RED}Creating Python Environment in $WRKSPC:${GREEN}"
-module load python 
+# pin module versions
+module load python/3.12
 python -m venv $WRKSPC/$ENV_NAME 
 module unload python
 
@@ -22,13 +23,16 @@ echo -e "${RED}Installing Dependencies:${GREEN}"
 source $WRKSPC/$ENV_NAME/bin/activate
 
 #Step 2 - install pip packages
+module load cudatoolkit/12.9
 pip install --no-cache-dir  --upgrade pip
-pip install --no-cache-dir  torch torchvision
+# pin torch version
+pip install --no-cache-dir  torch==2.8.0 torchvision --index-url https://download.pytorch.org/whl/cu129
 pip install --no-cache-dir  deepspeed
 pip install --no-cache-dir  transformers datasets tiktoken wandb tqdm
 
 # Step 3 - install mpi4py over cray-mpich
-module load PrgEnv-gnu cray-mpich craype-accel-nvidia80
+# pin module versions
+module load PrgEnv-gnu/8.5.0 cray-mpich/8.1.30 craype-accel-nvidia80
 MPICC="cc -shared" pip install --force --no-cache-dir --no-binary=mpi4py mpi4py
 
 echo -e "${RED}Your Python Environment is ready. To activate it run the following commands in the SAME order:${NC}"
