@@ -54,6 +54,7 @@ export MPICH_GPU_ALLREDUCE_USE_KERNEL=1
 SCRIPT="python -u benchmark_raw_collectives/all_reduce.py \
         --num-gpus-per-node $GPUS_PER_NODE \
         --machine perlmutter \
+        --pccl-recursive-alg \
         --dtype fp32 \
         --library pccl --test"
 
