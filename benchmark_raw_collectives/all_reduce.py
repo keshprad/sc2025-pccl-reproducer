@@ -51,7 +51,7 @@ if __name__ == "__main__":
             build_pccl()
     
     gpu_count, slurm_job_id = get_gpu_counts_and_job_id()
-    sizes = np.array([1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096])
+    sizes = np.array([1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024])
     unit = "MB"
     use_rd = args.pccl_recursive_alg 
     if args.library == "pccl":
