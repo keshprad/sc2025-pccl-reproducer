@@ -14,7 +14,7 @@
 //  - comm: MPI communicator (default MPI_COMM_WORLD).
 void recursiveDoublingAllGatherGPU(void* output, 
                                   const void* input, 
-                                  int total_elems, 
+                                  int64_t total_elems, 
                                   void* recv_buf,  // Same as output size
                                   MPI_Comm comm) {
     
@@ -23,7 +23,7 @@ void recursiveDoublingAllGatherGPU(void* output,
     MPI_Comm_size(comm, &size);
 
     assert(total_elems % size == 0 && "Input tensor size must be divisible by number of processes");
-    int block_size = total_elems / size;
+    int64_t block_size = total_elems / size;
 
     auto stream = at::cuda::getCurrentCUDAStream();
 
@@ -70,14 +70,14 @@ void recursiveDoublingAllGatherGPU(void* output,
 
 void ringAllGatherGPU(void* output,
                       const void* input,
-                      int total_elems,
+                      int64_t total_elems,
                       MPI_Comm comm) {
     int rank, size;
     MPI_Comm_rank(comm, &rank);
     MPI_Comm_size(comm, &size);
     
     assert(total_elems % size == 0 && "Input tensor size must be divisible by number of processes");
-    int block_size = total_elems / size;
+    int64_t block_size = total_elems / size;
     // printf("[Rank %d] block_size = %d\n", rank, block_size);
 
     auto stream = at::cuda::getCurrentCUDAStream();

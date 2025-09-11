@@ -5,7 +5,7 @@
 
 void recursiveHalvingDoublingAllReduceGPU(float* output, 
                                   const float* input, 
-                                  int total_elems, 
+                                  int64_t total_elems, 
                                   float* buf,  
                                   float* recv_buf,  
                                   float* intermediate_buf,  
@@ -13,7 +13,7 @@ void recursiveHalvingDoublingAllReduceGPU(float* output,
 
 void ringAllReduceGPU(float* output, 
                     const float* input, 
-                    int total_elems, 
+                    int64_t total_elems, 
                     float* intermediate_buf,        // Input size / world size
                     float* d_buf,                   // Input size
                     float* d_send,                  // Input size / world size
