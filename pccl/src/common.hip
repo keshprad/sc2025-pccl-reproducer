@@ -4,7 +4,7 @@
 
 
 // Kernel for vector addition.
-__global__ void vectorAddKernel(float* a, const float* b, int n) {
+__global__ void vectorAddKernel(float* a, const float* b, int64_t n) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
         a[idx] += b[idx];
@@ -12,7 +12,7 @@ __global__ void vectorAddKernel(float* a, const float* b, int n) {
 }
 
 // Function to launch the kernel.
-void vectorAdd(float* a, const float* b, int n, hipStream_t stream) {
+void vectorAdd(float* a, const float* b, int64_t n, hipStream_t stream) {
     int threads = 256;
     int blocks = (n + threads - 1) / threads;
     

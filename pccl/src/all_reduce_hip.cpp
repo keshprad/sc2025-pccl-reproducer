@@ -19,7 +19,7 @@
 //  - comm: MPI communicator (default MPI_COMM_WORLD).
 void recursiveHalvingDoublingAllReduceGPU(float* output,
                                 const float* input,
-                                int total_elems,
+                                int64_t total_elems,
                                 float* buf,                 // Same as input size
                                 float* recv_buf,            // Same as input size
                                 float* intermediate_buf,    // Input size / world size
@@ -33,7 +33,7 @@ void recursiveHalvingDoublingAllReduceGPU(float* output,
 // Performs an all-reduce on GPU tensors via ring reduce-scatter followed by ring all-gather.
 void ringAllReduceGPU(float* output,
                     const float* input,
-                    int total_elems,
+                    int64_t total_elems,
                     float* intermediate_buf,        // Input size / world size
                     float* d_buf,                   // Input size
                     float* d_send,                  // Input size / world size

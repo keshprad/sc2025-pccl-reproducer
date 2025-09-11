@@ -16,7 +16,7 @@
 // The reduction operation is elementwise addition.
 void recursiveHalvingReduceScatterGPU(float* output, 
     const float* input, 
-    int total_elems,
+    int64_t total_elems,
     float* buf, // same as size of input 
     float* recv_buf, // same as size of input 
     MPI_Comm comm) {
@@ -26,7 +26,7 @@ void recursiveHalvingReduceScatterGPU(float* output,
     MPI_Comm_size(comm, &size);
 
     assert(total_elems % size == 0 && "Input tensor size must be divisible by number of processes");
-    int block_size = total_elems / size;
+    int64_t block_size = total_elems / size;
     auto stream = at::hip::getCurrentHIPStreamMasqueradingAsCUDA();
 
     // copy the input into buf
@@ -37,7 +37,7 @@ void recursiveHalvingReduceScatterGPU(float* output,
         stream));
 
     
-    int max_count = (size / 2) * block_size;
+    int64_t max_count = (size / 2) * block_size;
     
     // Number of rounds = log2(size); assumes size is a power of 2.
     int rounds = static_cast<int>(std::log2(size));
@@ -54,7 +54,7 @@ void recursiveHalvingReduceScatterGPU(float* output,
         // The current buffer holds 'current_blocks' contiguous blocks.
         int half = current_blocks / 2;
         // Number of elements to send/receive in this round.
-        int count = half * block_size;
+        int64_t count = half * block_size;
 
         if ((rank % group_size) < (group_size / 2)) {
             // Lower half: keep the lower half and send the upper half.
@@ -101,7 +101,7 @@ void recursiveHalvingReduceScatterGPU(float* output,
 
 void ringReduceScatterGPU(float* output, 
     const float* input, 
-    int total_elems, 
+    int64_t total_elems, 
     float* d_buf, // same as size of input
     float* d_send, // same as size of output
     float* d_tmp, // same as size of output
@@ -112,7 +112,7 @@ void ringReduceScatterGPU(float* output,
     MPI_Comm_size(comm, &size);
     
     assert(total_elems % size == 0 && "Input tensor size must be divisible by number of processes");
-    int block_size = total_elems / size;
+    int64_t block_size = total_elems / size;
 
     auto stream = at::hip::getCurrentHIPStreamMasqueradingAsCUDA();
     hipEvent_t stream_sync_event;
