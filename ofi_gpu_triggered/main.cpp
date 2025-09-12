@@ -17,6 +17,7 @@
 #include <new>
 #include <hip/hip_runtime.h>
 #include <iostream>
+#include <mpi.h>
 
 // Power-of-two ring sizes make index wrap cheap
 #define REQ_QUEUE_SIZE  1024u
@@ -442,13 +443,13 @@ __global__ void gpu_enqueue_kernel(SharedQueue *queue, int rank, void *send_buff
     
     
     // Each thread on this GPU enqueues a request with the GPU's rank
-    if (tid < 10) { // Limit to first 1 threads for example
+    if (tid < 10) { // Limit to first 10 threads for example
         bool success = false;
         while (!success) {
             success = queue->enqueue_request(
                 rank * 1000 + tid,      // request_id (unique per GPU rank)
                 rank,                   // originating GPU rank
-                tid % 4,                // peer_rank (example: 4 peers)
+                tid % 8,                // peer_rank (example: 4 peers)
                 send_buffer,            // buffer
                 buffer_size,            // size
                 SEND                    // type
@@ -467,8 +468,8 @@ __global__ void gpu_dequeue_kernel(SharedQueue *queue, int rank, void *send_buff
     // Add a print statement to show kernel execution
     printf("GPU rank %d thread %d: Starting dequeue kernel\n", rank, tid);
     
-    // Each thread on this GPU enqueues a request with the GPU's rank
-    if (tid < 10) { // Limit to first 1 threads for example
+    // Each thread on this GPU dequeues completions for this GPU's rank
+    if (tid < 10) { // Limit to first 10 threads for example
         bool success = false;
         while (!success) {
             // Example: Check for completions belonging to this GPU rank
@@ -508,50 +509,54 @@ void host_process_requests(SharedQueue *queue) {
 }
 
 // Example main function
-int main() {
-    std::cout << "Starting HIP GPU-triggered communication queue test..." << std::endl;
+int main(int argc, char** argv) {
+    // Initialize MPI
+    int provided;
+    MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
     
-    std::cout << "[DEBUG] About to allocate SharedQueue in GPU-accessible memory..." << std::endl;
+    // Get world rank and size
+    int world_rank, world_size;
+    MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &world_size);
     
+    std::cout << "MPI Process " << world_rank << " of " << world_size << " starting HIP GPU-triggered communication queue test..." << std::endl;
+    
+    std::cout << "[DEBUG] Rank " << world_rank << ": About to allocate SharedQueue in GPU-accessible memory..." << std::endl;
+    // Each rank's cpu allocates a SharedQueue in GPU-accessible host memory
     // Allocate SharedQueue in GPU-accessible host memory
-    SharedQueue *h_queue;
+    SharedQueue *h_queue, *d_queue;
     HIP_CHECK(hipHostMalloc((void**)&h_queue, sizeof(SharedQueue), hipHostMallocMapped));
-    // Get device pointer for the SharedQueue object itself
-    SharedQueue *d_queue;
     HIP_CHECK(hipHostGetDevicePointer((void**)&d_queue, h_queue, 0));
-    
-    std::cout << "[DEBUG] SharedQueue allocated - host ptr: " << h_queue << ", device ptr: " << d_queue << std::endl;
+    std::cout << "[DEBUG] Rank " << world_rank << ": SharedQueue allocated - host ptr: " << h_queue << ", device ptr: " << d_queue << std::endl;
     
     // Construct SharedQueue using placement new
-    std::cout << "[DEBUG] Constructing SharedQueue..." << std::endl;
+    std::cout << "[DEBUG] Rank " << world_rank << ": Constructing SharedQueue..." << std::endl;
     new (h_queue) SharedQueue();
-    std::cout << "[DEBUG] SharedQueue created successfully!" << std::endl;
+    std::cout << "[DEBUG] Rank " << world_rank << ": SharedQueue created successfully!" << std::endl;
     
     // Allocate some dummy buffer
     void *send_buffer;
     size_t buffer_size = 1024;
     HIP_CHECK(hipMalloc(&send_buffer, buffer_size));
     
-    // Simulate GPU rank 0 (in a real multi-GPU setup, this would be determined by the actual GPU)
-    int my_gpu_rank = 0;
-    
-    std::cout << "Launching GPU kernel for GPU rank " << my_gpu_rank << "..." << std::endl;
+    std::cout << "MPI rank " << world_rank << " launching GPU kernel to enqueue completions..." << std::endl;
     
     // Launch GPU kernel with GPU rank
     dim3 block(32);
     dim3 grid(1);
-    std::cout << "[DEBUG] About to launch kernel..." << std::endl;
-    gpu_enqueue_kernel<<<grid, block>>>(d_queue, my_gpu_rank, send_buffer, buffer_size);
-    std::cout << "[DEBUG] Kernel launched, calling hipDeviceSynchronize..." << std::endl;
+    std::cout << "[DEBUG] Rank " << world_rank << ": About to launch kernel..." << std::endl;
+    gpu_enqueue_kernel<<<grid, block>>>(d_queue, world_rank, send_buffer, buffer_size);
+    std::cout << "[DEBUG] Rank " << world_rank << ": Kernel launched, calling hipDeviceSynchronize..." << std::endl;
     HIP_CHECK(hipDeviceSynchronize());
     
-    std::cout << "GPU kernel completed. Processing requests on host..." << std::endl;
+    std::cout << "MPI rank " << world_rank << " GPU kernel completed. Processing requests on host..." << std::endl;
     
     // Process requests on host (use host pointer)
     host_process_requests(h_queue);
     
+    std::cout << "MPI rank " << world_rank << " Done processing requests. Launching kernel to dequeue completions..." << std::endl;
     // dequeue completion kernel
-    gpu_dequeue_kernel<<<grid, block>>>(d_queue, my_gpu_rank, send_buffer, buffer_size);
+    gpu_dequeue_kernel<<<grid, block>>>(d_queue, world_rank, send_buffer, buffer_size);
     
     // Cleanup
     HIP_CHECK(hipFree(send_buffer));
@@ -560,7 +565,11 @@ int main() {
     h_queue->~SharedQueue();
     HIP_CHECK(hipHostFree(h_queue));
     
-    std::cout << "Test completed successfully!" << std::endl;
+    std::cout << "MPI rank " << world_rank << " test completed successfully!" << std::endl;
+    
+    // Finalize MPI
+    MPI_Finalize();
+    
     return 0;
 }
 
