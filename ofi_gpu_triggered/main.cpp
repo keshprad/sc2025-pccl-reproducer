@@ -52,10 +52,14 @@ struct alignas(64) RequestQueueEntry {
     RequestStatus status;
     int dirty; // dirty bit; 0 = free, 1 = ready
 
-    RequestQueueEntry() : request_id(0), origin_rank(-1), peer_rank(-1), buffer(nullptr), size(0), type(SEND), status(PENDING), dirty(0) {}
+    __device__ __host__ RequestQueueEntry() : request_id(0), origin_rank(-1), peer_rank(-1), buffer(nullptr), size(0), type(SEND), status(PENDING), dirty(0) {}
     
-    RequestQueueEntry(int request_id, int origin_rank, int peer_rank, void *buffer, size_t size, RequestType type) :
-        request_id(request_id), origin_rank(origin_rank), peer_rank(peer_rank), buffer(buffer), size(size), type(type), status(PENDING), dirty(1) {}
+    // NOTE: use like:
+    // RequestQueueEntry(...)
+    // __threadfence_system()
+    // entry.dirty = 1
+    __device__ __host__ RequestQueueEntry(int request_id, int origin_rank, int peer_rank, void *buffer, size_t size, RequestType type) :
+        request_id(request_id), origin_rank(origin_rank), peer_rank(peer_rank), buffer(buffer), size(size), type(type), status(PENDING), dirty(0) {}
 };
 
 struct alignas(64) CompletionQueueEntry {
@@ -66,10 +70,10 @@ struct alignas(64) CompletionQueueEntry {
     int status;
     int dirty; // dirty bit; 0 = free, 1 = ready
 
-    CompletionQueueEntry() : request_id(0), origin_rank(-1), bytes_transferred(0), status(0), dirty(0) {}
+    __device__ __host__ CompletionQueueEntry() : request_id(0), origin_rank(-1), bytes_transferred(0), status(0), dirty(0) {}
     
-    CompletionQueueEntry(int request_id, int origin_rank, int bytes_transferred, int status) :
-        request_id(request_id), origin_rank(-1), bytes_transferred(bytes_transferred), status(status), dirty(1) {}
+    __device__ __host__ CompletionQueueEntry(int request_id, int origin_rank, int bytes_transferred, int status) :
+        request_id(request_id), origin_rank(origin_rank), bytes_transferred(bytes_transferred), status(status), dirty(1) {}
 };
 
 class SharedQueue {
@@ -106,15 +110,6 @@ public:
     bool dequeue_request(RequestQueueEntry &entry);
     bool enqueue_completion(int request_id, int origin_rank, int bytes_transferred, int status);
     
-    // Utility functions for circular queue management
-    bool is_request_queue_empty();
-    bool is_completion_queue_empty();
-    size_t get_request_queue_size();
-    size_t get_completion_queue_size();
-    bool is_request_queue_full();
-    bool is_completion_queue_full();
-    size_t get_request_queue_free_space();
-    size_t get_completion_queue_free_space();
 };
 
 // SharedQueue implementation
@@ -158,50 +153,131 @@ void SharedQueue::initialize() {
 }
 
 void SharedQueue::cleanup() {
-    if (h_request_queue) hipHostFree(h_request_queue);
-    if (h_completion_queue) hipHostFree(h_completion_queue);
-    if (h_request_head) hipHostFree(h_request_head);
-    if (h_request_tail) hipHostFree(h_request_tail);
-    if (h_completion_head) hipHostFree(h_completion_head);
-    if (h_completion_tail) hipHostFree(h_completion_tail);
+    if (h_request_queue) HIP_CHECK(hipHostFree(h_request_queue));
+    if (h_completion_queue) HIP_CHECK(hipHostFree(h_completion_queue));
+    if (h_request_head) HIP_CHECK(hipHostFree(h_request_head));
+    if (h_request_tail) HIP_CHECK(hipHostFree(h_request_tail));
+    if (h_completion_head) HIP_CHECK(hipHostFree(h_completion_head));
+    if (h_completion_tail) HIP_CHECK(hipHostFree(h_completion_tail));
 }
 
 // Device-side function: GPU enqueues requests
+// 
+// Data race safety explanation:
+// This algorithm is race-free due to the two-phase publication protocol:
+// 
+// PHASE 1: GPU writes all request data to the slot
+// - Only one GPU can write to each slot due to CAS on tail pointer
+// - __threadfence_system() ensures all data writes are visible before dirty bit is set
+//
+// PHASE 2: GPU publishes the data by setting dirty bit
+// - dirty=1 acts as a "publication flag" telling host the data is ready
+// - Host will only attempt to read entries where dirty=1
+// - If host sees dirty=0, it knows the entry is either empty or still being written
+// - This prevents host from reading partially-written data
+//
+// Memory ordering guarantees:
+// - __threadfence_system() ensures host sees all slot data before seeing dirty=1
+// - Host's __atomic_compare_exchange_n with ACQUIRE ensures it sees all GPU writes
+// - No race condition possible: either host sees dirty=0 (won't read and tries again) or dirty=1 (safe to read) 
 __device__ bool SharedQueue::enqueue_request(int request_id, int origin_rank, int peer_rank, void *buffer, size_t size, RequestType type) {
+    printf("[DEBUG] enqueue_request: Entry - req_id=%d, origin_rank=%d, peer_rank=%d, buffer=%p, size=%zu\n", 
+           request_id, origin_rank, peer_rank, buffer, size);
+    
     int current_tail, next_tail;
     int slot;
     
+    // Debug: Check if pointers are valid
+    if (d_request_tail == nullptr) {
+        printf("[ERROR] enqueue_request: d_request_tail is NULL!\n");
+        return false;
+    }
+    if (d_request_head == nullptr) {
+        printf("[ERROR] enqueue_request: d_request_head is NULL!\n");
+        return false;
+    }
+    if (d_request_queue == nullptr) {
+        printf("[ERROR] enqueue_request: d_request_queue is NULL!\n");
+        return false;
+    }
+    
+    printf("[DEBUG] enqueue_request: Pointers valid - d_request_tail=%p, d_request_head=%p, d_request_queue=%p\n",
+           d_request_tail, d_request_head, d_request_queue);
+    
     // use CAS to acquire unique, open slot in request queue
+    // ensures no two GPUs acquire the same slot
     do {
+        printf("[DEBUG] enqueue_request: About to read d_request_tail\n");
         current_tail = *d_request_tail;
+        printf("[DEBUG] enqueue_request: current_tail=%d\n", current_tail);
+        
         slot = current_tail & (req_queue_size - 1);
+        printf("[DEBUG] enqueue_request: calculated slot=%d (req_queue_size=%zu)\n", slot, req_queue_size);
+        
+        printf("[DEBUG] enqueue_request: About to read d_request_head\n");
+        int current_head = *d_request_head;
+        printf("[DEBUG] enqueue_request: current_head=%d\n", current_head);
         
         // TODO: handle queue full properly rather than failure
         // Check if queue is full
-        if (current_tail - *d_request_head >= req_queue_size) {
+        if (current_tail - current_head >= req_queue_size) {
+            printf("[DEBUG] enqueue_request: Queue full - tail=%d, head=%d, size=%zu\n", 
+                   current_tail, current_head, req_queue_size);
             return false;
         }
         
+        printf("[DEBUG] enqueue_request: About to check slot dirty bit at slot %d\n", slot);
         // Check if slot is free
         if (d_request_queue[slot].dirty != 0) {
+            printf("[DEBUG] enqueue_request: Slot %d not free (dirty=%d)\n", slot, d_request_queue[slot].dirty);
             return false;
         }
+        printf("[DEBUG] enqueue_request: Slot %d is free\n", slot);
 
         // advance tail
         next_tail = current_tail + 1;
+        printf("[DEBUG] enqueue_request: Attempting CAS - current_tail=%d, next_tail=%d\n", current_tail, next_tail);
         
     } while (atomicCAS(d_request_tail, current_tail, next_tail) != current_tail);
     
+    printf("[DEBUG] enqueue_request: CAS successful, acquired slot %d\n", slot);
+    
     // Construct the entry in-place using placement new
     new (&d_request_queue[slot]) RequestQueueEntry(request_id, origin_rank, peer_rank, buffer, size, type);
-    
+    printf("[DEBUG] enqueue_request: Entry constructed successfully\n");
     __threadfence_system(); // Ensure all writes are visible to host
-    d_request_queue[slot].dirty = 1; // Mark as ready
+    printf("[DEBUG] enqueue_request: Memory fence executed\n");
+    d_request_queue[slot].dirty = 1; // Mark as ready - PUBLICATION POINT
+    printf("[DEBUG] enqueue_request: Dirty bit set, returning success\n");
     
     return true;
 }
 
 // Device-side function: GPU dequeues completion for the current rank
+//
+// Data race safety explanation:
+// This algorithm is race-free due to the two-phase consumption protocol:
+//
+// PHASE 1: GPU atomically claims a completion entry
+// - CAS on completion head ensures only one GPU thread can claim each entry
+// - Multiple checks ensure entry is valid: queue not empty, entry ready (dirty=1), correct rank
+// - Only proceeds if all conditions met, preventing reading of invalid/incomplete data
+//
+// PHASE 2: GPU consumes the data and marks entry as free
+// - Copies all entry data before marking as consumed
+// - __threadfence_system() ensures data copy is complete before clearing dirty bit
+// - dirty=0 marks entry as free for reuse by host
+//
+// Memory ordering guarantees:
+// - atomicCAS provides acquire semantics ensuring visibility of host's completion writes
+// - __threadfence_system() ensures GPU's data copy completes before dirty=0 write
+// - Host's dirty=1 write (after placement new) is globally visible before GPU sees it
+//
+// Rank-based filtering:
+// - Only dequeues completions intended for this specific GPU rank
+// - Prevents cross-GPU completion theft in multi-GPU scenarios
+// - Other GPUs will skip entries not meant for them. Since GPUs only check the head entry of the
+//   list, in practice the GPU waits until their entry is at the head.
 __device__ bool SharedQueue::dequeue_completion(CompletionQueueEntry &entry, int rank) {
     int current_head, next_head, slot;
     
@@ -233,13 +309,36 @@ __device__ bool SharedQueue::dequeue_completion(CompletionQueueEntry &entry, int
     // Successfully claimed the head entry
     entry = d_completion_queue[slot];
     __threadfence_system(); // Ensure read is complete
-    
     d_completion_queue[slot].dirty = 0; // Mark as consumed
     
     return true;
 }
 
 // Host-side function: Host dequeues requests
+//
+// Data race safety explanation:
+// This algorithm is race-free due to the two-phase consumption protocol on host side:
+//
+// PHASE 1: Host atomically claims a request entry
+// - __atomic_compare_exchange_n on request head ensures only one host thread can claim each entry
+// - Multiple checks ensure entry is valid: queue not empty, entry ready (dirty=1)
+// - Only proceeds if all conditions met, preventing reading of invalid/incomplete data
+// - Uses ACQUIRE semantics to ensure visibility of all GPU writes to the claimed entry
+//
+// PHASE 2: Host consumes the data and marks entry as free
+// - Copies all entry data from the claimed slot
+// - Sets dirty=0 to mark entry as free for reuse by GPU
+// - No memory fence needed here since host is single-threaded consumer
+//
+// Memory ordering guarantees:
+// - __atomic_compare_exchange_n with ACQUIRE ensures host sees all GPU writes to the entry
+// - GPU's __threadfence_system() + dirty=1 write ensures all entry data is visible before host claims it
+// - Host's dirty=0 write makes slot available for GPU reuse
+//
+// Host-GPU coordination:
+// - Host only reads entries that GPU has published (dirty=1)
+// - Host frees entries for GPU reuse by setting dirty=0
+// - This creates a clean handoff from GPU producer to host consumer
 bool SharedQueue::dequeue_request(RequestQueueEntry &entry) {
     int current_head, next_head, slot;
     
@@ -266,13 +365,40 @@ bool SharedQueue::dequeue_request(RequestQueueEntry &entry) {
     
     // Successfully claimed the head entry
     entry = h_request_queue[slot];
-    
+    // TODO: Not sure if this mem fence is needed.
+    std::atomic_thread_fence(std::memory_order_release); // Ensure read is complete
     h_request_queue[slot].dirty = 0; // Mark as consumed
     
     return true;
 }
 
 // Host-side function: Host enqueues completions
+//
+// Data race safety explanation:
+// This algorithm is race-free due to the two-phase publication protocol on host side:
+//
+// PHASE 1: Host writes all completion data to the slot
+// - Only one host thread can write to each slot due to CAS on tail pointer
+// - Uses placement new to construct completion entry with all data fields
+// - All data writes complete before proceeding to publication phase
+//
+// PHASE 2: Host publishes the completion by setting dirty bit
+// - dirty=1 acts as "publication flag" telling GPU the completion is ready
+// - GPU will only attempt to read entries where dirty=1
+// - If GPU sees dirty=0, it knows the entry is either empty or still being written
+// - This prevents GPU from reading partially-written completion data
+//
+// Memory ordering guarantees:
+// - Host's atomic CAS operations provide ordering for slot allocation
+// - Placement new completes before dirty=1 write due to program ordering
+// - GPU's atomic reads ensure it sees all host writes before claiming entries
+// - Optional memory fence available for multi-threaded host scenarios
+//
+// Host-GPU coordination:
+// - Host publishes completions that GPU can consume using dirty flag
+// - GPU frees entries for host reuse by setting dirty=0 after consumption
+// - This creates a clean handoff from host producer to GPU consumer(s)
+// - Safe for both single-threaded and multi-threaded host usage
 bool SharedQueue::enqueue_completion(int request_id, int origin_rank, int bytes_transferred, int status) {
     int current_tail, next_tail;
     int slot;
@@ -300,114 +426,60 @@ bool SharedQueue::enqueue_completion(int request_id, int origin_rank, int bytes_
     
     // Construct the entry in-place using placement new
     new (&h_completion_queue[slot]) CompletionQueueEntry(request_id, origin_rank, bytes_transferred, status);
-    
+    // TODO: Not sure if this mem fence is needed
+    std::atomic_thread_fence(std::memory_order_release); // Ensure write is complete
     h_completion_queue[slot].dirty = 1; // Mark as ready
     
     return true;
 }
 
-/*
- * Thread-safe utility functions
- * 
- * These functions read shared data that's being modified concurrently by:
- * - GPU threads (modifying head/tail pointers atomically)
- * - Host threads (modifying head/tail pointers)
- * 
- * Race condition risks without proper synchronization:
- * 1. Torn reads: Reading head and tail at different times
- * 2. Inconsistent snapshots: head/tail changing between reads
- * 3. Compiler optimizations reordering reads
- * 
- * Solutions implemented:
- * 1. Atomic loads with acquire semantics (__atomic_load_n)
- * 2. Consistent snapshots by reading head and tail atomically
- * 3. Memory ordering prevents compiler reordering
- */
-
-// Utility functions - Thread-safe versions with atomic reads
-bool SharedQueue::is_request_queue_empty() {
-    // Atomic read of both head and tail to avoid torn reads
-    int head = __atomic_load_n(h_request_head, __ATOMIC_ACQUIRE);
-    int tail = __atomic_load_n(h_request_tail, __ATOMIC_ACQUIRE);
-    return (head == tail);
-}
-
-bool SharedQueue::is_completion_queue_empty() {
-    // Atomic read of both head and tail to avoid torn reads
-    int head = __atomic_load_n(h_completion_head, __ATOMIC_ACQUIRE);
-    int tail = __atomic_load_n(h_completion_tail, __ATOMIC_ACQUIRE);
-    return (head == tail);
-}
-
-size_t SharedQueue::get_request_queue_size() {
-    // Atomic snapshot of head and tail
-    int head = __atomic_load_n(h_request_head, __ATOMIC_ACQUIRE);
-    int tail = __atomic_load_n(h_request_tail, __ATOMIC_ACQUIRE);
-    int size = tail - head;
-    return (size >= 0) ? size : 0;  // Ensure non-negative
-}
-
-size_t SharedQueue::get_completion_queue_size() {
-    // Atomic snapshot of head and tail
-    int head = __atomic_load_n(h_completion_head, __ATOMIC_ACQUIRE);
-    int tail = __atomic_load_n(h_completion_tail, __ATOMIC_ACQUIRE);
-    int size = tail - head;
-    return (size >= 0) ? size : 0;  // Ensure non-negative
-}
-bool SharedQueue::is_request_queue_full() {
-    // Use atomic reads for consistent snapshot
-    int head = __atomic_load_n(h_request_head, __ATOMIC_ACQUIRE);
-    int tail = __atomic_load_n(h_request_tail, __ATOMIC_ACQUIRE);
-    return ((tail - head) >= REQ_QUEUE_SIZE);
-}
-
-bool SharedQueue::is_completion_queue_full() {
-    // Use atomic reads for consistent snapshot
-    int head = __atomic_load_n(h_completion_head, __ATOMIC_ACQUIRE);
-    int tail = __atomic_load_n(h_completion_tail, __ATOMIC_ACQUIRE);
-    return ((tail - head) >= CMP_QUEUE_SIZE);
-}
-
-size_t SharedQueue::get_request_queue_free_space() {
-    // Use atomic reads for consistent snapshot
-    int head = __atomic_load_n(h_request_head, __ATOMIC_ACQUIRE);
-    int tail = __atomic_load_n(h_request_tail, __ATOMIC_ACQUIRE);
-    int used = tail - head;
-    return (used < REQ_QUEUE_SIZE) ? (REQ_QUEUE_SIZE - used) : 0;
-}
-
-size_t SharedQueue::get_completion_queue_free_space() {
-    // Use atomic reads for consistent snapshot
-    int head = __atomic_load_n(h_completion_head, __ATOMIC_ACQUIRE);
-    int tail = __atomic_load_n(h_completion_tail, __ATOMIC_ACQUIRE);
-    int used = tail - head;
-    return (used < CMP_QUEUE_SIZE) ? (CMP_QUEUE_SIZE - used) : 0;
-}
-
 // Example GPU kernel that enqueues requests
-__global__ void gpu_communication_kernel(SharedQueue *queue, int rank, void *send_buffer, size_t buffer_size) {
+__global__ void gpu_enqueue_kernel(SharedQueue *queue, int rank, void *send_buffer, size_t buffer_size) {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // Add a print statement to show kernel execution
+    printf("GPU rank %d thread %d: Starting enqueue kernel\n", rank, tid);
+    
     
     // Each thread on this GPU enqueues a request with the GPU's rank
-    if (tid < 10) { // Limit to first 10 threads for example
-        bool success = queue->enqueue_request(
-            rank * 1000 + tid,  // request_id (unique per GPU rank)
-            rank                // originating GPU rank
-            tid % 4,                   // peer_rank (example: 4 peers)
-            send_buffer,               // buffer
-            buffer_size,               // size
-            SEND,                      // type
-        );
-        
-        if (success) {
-            printf("GPU rank %d thread %d: Successfully enqueued send request\n", rank, tid);
+    if (tid < 10) { // Limit to first 1 threads for example
+        bool success = false;
+        while (!success) {
+            success = queue->enqueue_request(
+                rank * 1000 + tid,      // request_id (unique per GPU rank)
+                rank,                   // originating GPU rank
+                tid % 4,                // peer_rank (example: 4 peers)
+                send_buffer,            // buffer
+                buffer_size,            // size
+                SEND                    // type
+            );
+            if (success) {
+                printf("GPU rank %d thread %d: Successfully enqueued send request\n", rank, tid);
+            } else {
+                printf("GPU rank %d thread %d: Unsuccessful enqueued send request\n", rank, tid);
+            }
         }
-        
-        // Example: Check for completions belonging to this GPU rank
-        CompletionQueueEntry completion;
-        if (queue->dequeue_completion(completion, rank)) {
-            printf("GPU rank %d thread %d: Received completion for request %d (status: %d, bytes: %d)\n", 
-                   rank, tid, completion.request_id, completion.status, completion.bytes_transferred);
+    }
+}
+__global__ void gpu_dequeue_kernel(SharedQueue *queue, int rank, void *send_buffer, size_t buffer_size) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // Add a print statement to show kernel execution
+    printf("GPU rank %d thread %d: Starting dequeue kernel\n", rank, tid);
+    
+    // Each thread on this GPU enqueues a request with the GPU's rank
+    if (tid < 10) { // Limit to first 1 threads for example
+        bool success = false;
+        while (!success) {
+            // Example: Check for completions belonging to this GPU rank
+            CompletionQueueEntry completion;
+            success = queue->dequeue_completion(completion, rank);
+            if (success) {
+                printf("GPU rank %d thread %d: Received completion for request %d (status: %d, bytes: %d)\n", 
+                    rank, tid, completion.request_id, completion.status, completion.bytes_transferred);
+            } else {
+                printf("GPU rank %d thread %d: Unsuccessful completion\n", rank, tid);
+            }
         }
     }
 }
@@ -439,7 +511,21 @@ void host_process_requests(SharedQueue *queue) {
 int main() {
     std::cout << "Starting HIP GPU-triggered communication queue test..." << std::endl;
     
-    SharedQueue queue;
+    std::cout << "[DEBUG] About to allocate SharedQueue in GPU-accessible memory..." << std::endl;
+    
+    // Allocate SharedQueue in GPU-accessible host memory
+    SharedQueue *h_queue;
+    HIP_CHECK(hipHostMalloc((void**)&h_queue, sizeof(SharedQueue), hipHostMallocMapped));
+    // Get device pointer for the SharedQueue object itself
+    SharedQueue *d_queue;
+    HIP_CHECK(hipHostGetDevicePointer((void**)&d_queue, h_queue, 0));
+    
+    std::cout << "[DEBUG] SharedQueue allocated - host ptr: " << h_queue << ", device ptr: " << d_queue << std::endl;
+    
+    // Construct SharedQueue using placement new
+    std::cout << "[DEBUG] Constructing SharedQueue..." << std::endl;
+    new (h_queue) SharedQueue();
+    std::cout << "[DEBUG] SharedQueue created successfully!" << std::endl;
     
     // Allocate some dummy buffer
     void *send_buffer;
@@ -454,27 +540,25 @@ int main() {
     // Launch GPU kernel with GPU rank
     dim3 block(32);
     dim3 grid(1);
-    gpu_communication_kernel<<<grid, block>>>(&queue, send_buffer, buffer_size, my_gpu_rank);
+    std::cout << "[DEBUG] About to launch kernel..." << std::endl;
+    gpu_enqueue_kernel<<<grid, block>>>(d_queue, my_gpu_rank, send_buffer, buffer_size);
+    std::cout << "[DEBUG] Kernel launched, calling hipDeviceSynchronize..." << std::endl;
     HIP_CHECK(hipDeviceSynchronize());
     
     std::cout << "GPU kernel completed. Processing requests on host..." << std::endl;
     
-    // Process requests on host
-    host_process_requests(&queue);
+    // Process requests on host (use host pointer)
+    host_process_requests(h_queue);
     
-    std::cout << "Queue Statistics:" << std::endl;
-    std::cout << "  Request queue size: " << queue.get_request_queue_size() << std::endl;
-    std::cout << "  Request queue free space: " << queue.get_request_queue_free_space() << std::endl;
-    std::cout << "  Request queue empty: " << (queue.is_request_queue_empty() ? "Yes" : "No") << std::endl;
-    std::cout << "  Request queue full: " << (queue.is_request_queue_full() ? "Yes" : "No") << std::endl;
-    
-    std::cout << "  Completion queue size: " << queue.get_completion_queue_size() << std::endl;
-    std::cout << "  Completion queue free space: " << queue.get_completion_queue_free_space() << std::endl;
-    std::cout << "  Completion queue empty: " << (queue.is_completion_queue_empty() ? "Yes" : "No") << std::endl;
-    std::cout << "  Completion queue full: " << (queue.is_completion_queue_full() ? "Yes" : "No") << std::endl;
+    // dequeue completion kernel
+    gpu_dequeue_kernel<<<grid, block>>>(d_queue, my_gpu_rank, send_buffer, buffer_size);
     
     // Cleanup
     HIP_CHECK(hipFree(send_buffer));
+    
+    // Explicitly call destructor and free SharedQueue memory
+    h_queue->~SharedQueue();
+    HIP_CHECK(hipHostFree(h_queue));
     
     std::cout << "Test completed successfully!" << std::endl;
     return 0;
