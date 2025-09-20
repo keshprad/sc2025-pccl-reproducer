@@ -43,15 +43,17 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.use_pccl_cpp_backend:
-        if dist.get_rank() == 0:
-            build_pccl()
-            MPI.COMM_WORLD.Barrier()
-        else:
-            MPI.COMM_WORLD.Barrier()
-            build_pccl()
+        # if dist.get_rank() == 0:
+        #     build_pccl()
+        #     MPI.COMM_WORLD.Barrier()
+        # else:
+        #     MPI.COMM_WORLD.Barrier()
+        #     build_pccl()
+        build_pccl()
+        MPI.COMM_WORLD.Barrier()
     
     gpu_count, slurm_job_id = get_gpu_counts_and_job_id()
-    sizes = np.array([1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024])
+    sizes = np.array([1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096])
     unit = "MB"
     use_rd = args.pccl_recursive_alg 
     if args.library == "pccl":

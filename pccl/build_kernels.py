@@ -22,8 +22,8 @@ import mpi4py
 def build():
     # Check if cuda 11 is installed for compute capability 8.0
     global BUILT 
-    if BUILT:
-        return
+    # if BUILT:
+    #     return
     cc_flag = []
     if torch.version.hip is None:
         _, bare_metal_major, bare_metal_minor = _get_cuda_bare_metal_version(
@@ -46,7 +46,11 @@ def build():
 
     # Build path
     srcpath = pathlib.Path(__file__).parent.absolute() / "src"
-    buildpath = pathlib.Path(__file__).parent.absolute() / 'build'
+    if torch.version.hip is None:
+        buildpath = pathlib.Path(__file__).parent.absolute() / 'build'
+    else:
+        # on Frontier system
+        buildpath = pathlib.Path('/') / 'mnt' / 'bb' / os.environ['USER']
     _create_build_dir(buildpath)
 
     # Helper function to build the kernels.
