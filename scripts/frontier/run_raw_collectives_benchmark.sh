@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH -p batch
-#SBATCH -A CSC547
+#SBATCH -A LRN089
 #SBATCH -t 00:05:00
 #SBATCH -C nvme
 
-PROJ_NAME="csc547"
+PROJ_NAME="lrn089"
 export WRKSPC=/lustre/orion/$PROJ_NAME/scratch/$USER/
 VENV_NAME="pccl-venv"
 
