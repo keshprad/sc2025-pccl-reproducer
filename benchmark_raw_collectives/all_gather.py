@@ -43,12 +43,18 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     if args.use_pccl_cpp_backend:
-        if dist.get_rank() == 0:
+        if args.machine == 'frontier':
+            # use this on frontier (build in node-local NVMe)
             build_pccl()
             MPI.COMM_WORLD.Barrier()
         else:
-            MPI.COMM_WORLD.Barrier()
-            build_pccl()
+            # use this on pm and other machines
+            if dist.get_rank() == 0:
+                build_pccl()
+                MPI.COMM_WORLD.Barrier()
+            else:
+                MPI.COMM_WORLD.Barrier()
+                build_pccl()
 
     gpu_count, slurm_job_id = get_gpu_counts_and_job_id()
     sizes = np.array([1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]) 
