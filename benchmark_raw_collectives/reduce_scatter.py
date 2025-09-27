@@ -43,7 +43,7 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
 
-    if args.use_pccl_cpp_backend:
+    if args.use_pccl_cpp_backend and args.library == 'pccl':
         if args.machine == 'frontier':
             # use this on frontier (build in node-local NVMe)
             build_pccl()
