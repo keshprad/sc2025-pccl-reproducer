@@ -84,7 +84,7 @@ if __name__ == "__main__":
         if dist.get_rank() == 0:
             writer = csv.writer(f)
             # Write the header
-            header = ["gpu_count", "slurm_job_id", "output_size", "unit", f"time_{args.library}"]
+            header = ["gpu_count", "slurm_job_id", "output_size", "unit", f"time_{args.library}", f"time_{args.library}_MPI_Wtime"]
             writer.writerow(header)
             f.flush()
 
@@ -110,22 +110,22 @@ if __name__ == "__main__":
             kwargs["use_rh_and_rd"] = args.pccl_recursive_alg
             kwargs["use_pccl_cpp_backend"] = args.use_pccl_cpp_backend
 
-            time = time_something(function, output_tensor, input_tensor, group=pg, **kwargs)
+            time, mpi_Wtime = time_something(function, output_tensor, input_tensor, group=pg, **kwargs)
 
             # gold
             if args.test:
                 output_tensor_gold = torch.empty((output_buffer_numel,), dtype=dtype, device=device)
-                nccl_time = time_something(_all_reduce, output_tensor_gold, input_tensor)
+                nccl_time, nccl_mpi_Wtime = time_something(_all_reduce, output_tensor_gold, input_tensor)
                 assert allclose(output_tensor, output_tensor_gold)
             
             if dist.get_rank() == 0:
-                print(f"time_{args.library} = {time:.2f} ms")
+                print(f"time_{args.library} = {time:.2f} ms, MPI_Wtime = {mpi_Wtime:.2f} ms")
                 if args.test:
-                    print(f"time_nccl = {nccl_time:.2f} ms")
+                    print(f"time_nccl = {nccl_time:.2f} ms, MPI_Wtime = {nccl_mpi_Wtime:.2f} ms")
             
             if dist.get_rank() == 0:
                 print("===============================")
-                writer.writerow([gpu_count, slurm_job_id, size, unit, time])
+                writer.writerow([gpu_count, slurm_job_id, size, unit, time, mpi_Wtime])
                 f.flush()
         
         if args.test and dist.get_rank() == 0:

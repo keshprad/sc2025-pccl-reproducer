@@ -84,7 +84,7 @@ if __name__ == "__main__":
     with open(csv_filename, "w", newline="") as f:
         if dist.get_rank() == 0:
             writer = csv.writer(f)
-            header = ["gpu_count", "slurm_job_id", "output_size", "unit", f"time_{args.library}"]
+            header = ["gpu_count", "slurm_job_id", "output_size", "unit", f"time_{args.library}", f"time_{args.library}_MPI_Wtime"]
             writer.writerow(header)
 
         for size in sizes:
@@ -103,7 +103,7 @@ if __name__ == "__main__":
             kwargs["use_rh"] = use_rh
             kwargs["use_pccl_cpp_backend"] = args.use_pccl_cpp_backend
 
-            time = time_something(function, output_tensor, input_tensor, group=pg, **kwargs)
+            time, mpi_Wtime = time_something(function, output_tensor, input_tensor, group=pg, **kwargs)
            
             #gold
             if args.test:
@@ -112,11 +112,11 @@ if __name__ == "__main__":
                 assert allclose(output_tensor, output_tensor_gold)
 
             if dist.get_rank() == 0:
-                print(f"time_{args.library} = {time:.2f} ms")                
+                print(f"time_{args.library} = {time:.2f} ms, MPI_Wtime = {mpi_Wtime:.2f} ms")
 
             if dist.get_rank() == 0:
                 print("===============================")
-                writer.writerow([gpu_count, slurm_job_id, size, unit, time])
+                writer.writerow([gpu_count, slurm_job_id, size, unit, time, mpi_Wtime])
         
         if args.test and dist.get_rank() == 0:
             print("All tests passed! PCCL outputs match NCCL outputs!")
