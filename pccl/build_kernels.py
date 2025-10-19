@@ -22,8 +22,8 @@ import mpi4py
 def build():
     # Check if cuda 11 is installed for compute capability 8.0
     global BUILT 
-    # if BUILT:
-    #     return
+    if BUILT:
+        return
     cc_flag = []
     if torch.version.hip is None:
         _, bare_metal_major, bare_metal_minor = _get_cuda_bare_metal_version(
